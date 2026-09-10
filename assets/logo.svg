@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Aerial logo">
+  <!-- Aerial brand mark: gradient rounded square + play glyph.
+       Master source for all app icons (see scripts/generate-icons.ps1).
+       Design grid: 40 units -> rect(2,2,36,36,r11), triangle(16,12.5)(16,27.5)(29,20). -->
+  <defs>
+    <linearGradient id="aerial-grad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8b5cf6" />
+      <stop offset=".55" stop-color="#4f7cff" />
+      <stop offset="1" stop-color="#2dd4ff" />
+    </linearGradient>
+  </defs>
+  <rect x="25.6" y="25.6" width="460.8" height="460.8" rx="140.8" fill="url(#aerial-grad)" />
+  <polygon points="204.8,160 204.8,352 371.2,256" fill="#fff" />
+</svg>

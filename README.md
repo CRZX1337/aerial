@@ -1,131 +1,163 @@
-# HOODTV
+<p align="center">
+  <img src="public/icons/icon-192.png" width="96" height="96" alt="Aerial logo" />
+</p>
 
-Moderne, eigenständige IPTV-Webplattform. Ein **einzelner globaler Xtream-Stream**
-wird durch das Backend an alle Zuschauer verteilt — die Xtream-Zugangsdaten
-verlassen den Server niemals und erreichen keinen Browser.
+<h1 align="center">Aerial</h1>
+
+<p align="center">
+  <strong>A sleek, privacy-first IPTV player PWA. Bring your own provider.</strong><br/>
+  Xtream Codes · M3U / M3U8 · XMLTV EPG · native HLS on iOS
+</p>
+
+<p align="center">
+  <a href="https://github.com/CRZX1337/aerial/actions/workflows/ci.yml"><img src="https://github.com/CRZX1337/aerial/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
+  <a href="package.json"><img src="https://img.shields.io/badge/node-%3E%3D20-green.svg" alt="Node >= 20" /></a>
+  <img src="https://img.shields.io/badge/platform-iOS%20%7C%20Android%20%7C%20Desktop-9cf" alt="Platforms" />
+</p>
+
+---
+
+**Aerial is a player, not a provider.** It hosts no streams, maintains no
+channel catalog, and proxies nothing. You connect your own IPTV subscription
+— the app talks **directly from your browser to your provider**. No
+credentials ever reach an Aerial server.
 
 ```
-Browser ──(HLS über opaque Proxy-Tokens)──▶ HOODTV Backend ──(Xtream API + /live/*)──▶ Provider
+Your browser (Aerial PWA)
+├──► Aerial server: app login, app shell, security headers   (sees no provider data)
+└──► Your IPTV provider: catalog, EPG, live stream           (direct connection)
 ```
 
-## Features
+## ✨ Features
 
-- **Live-Player** direkt im Browser (hls.js; iOS/Safari nutzt natives HLS)
-- **Kategorien, Suche, Sender, Favoriten** (localStorage) und **EPG** (Jetzt/Danach)
-- **Admin- & User-Login** mit zwei separat, kryptografisch zufällig generierten Passwörtern
-- **Server-seitig erzwungene Rechte:**
-  - Admin darf jederzeit starten / stoppen / wechseln
-  - User darf nur wechseln, wenn **≥ 30 Minuten** keine Admin-Aktivität stattfand
-  - Wenn ein User wechseln darf, ändert er den **globalen Sender für alle**
-- **Ein einziger globaler Stream**: Channel-Wechsel werden über eine Mutex serialisiert;
-  alte Stream-Tokens werden sofort invalidiert → keine parallelen Streams, keine Race Conditions
-- **Kein Transcoding**: HLS-Playlists und Segmente werden byte-genau weitergeleitet
-  (effizient für Server mit begrenzten Ressourcen)
-- **SSE** synchronisiert den globalen Zustand live an alle Clients
-- Mobile-first UI im Matrix/Cyber-Look (schwarz/weiß/Cyber-Grün), für iOS Safari optimiert
+- **Bring your own provider** — multiple IPTV profiles with an onboarding
+  wizard, live connection test, and instant switching
+- **Provider formats** — [Xtream Codes API](https://wiki.xtream-codes.com/), M3U/M3U8
+  playlists, XMLTV EPG (gzip-compressed guides supported)
+- **Real player engineering** — native HLS on iOS/Safari, hls.js elsewhere,
+  bounded error recovery with exponential backoff, autoplay-block handling
+  ("tap to play"), Media Session (lock screen / Control Center)
+- **Native-feeling PWA** — install to your home screen: standalone window,
+  generated icon set, dark first paint, Dynamic Island / Home Indicator
+  safe areas, app-resume and network-switch recovery
+- **Per-profile data** — favorites and recently watched are tied to each
+  provider profile; switching providers never mixes data
+- **Lean & private** — zero build step, two dependencies, strict CSP,
+  provider passwords stored only on explicit opt-in on your device
 
-## Voraussetzungen
-
-- Node.js **≥ 20** (getestet mit 22)
-
-## Schnellstart
+## 🚀 Quick start
 
 ```bash
+git clone https://github.com/CRZX1337/aerial.git
+cd aerial
 npm install
-
-# .env anlegen und Xtream-Daten eintragen
-cp .env.example .env
-#   XTREAM_HOST=http://dein-provider.example:8080
-#   XTREAM_USERNAME=...
-#   XTREAM_PASSWORD=...
-
 npm start
 ```
 
-Beim **ersten Start** werden die beiden Passwörter kryptografisch zufällig erzeugt,
-**einmalig** im Terminal ausgegeben und danach nur als scrypt-Hash in
-`data/auth.json` gespeichert. Werte notieren!
+On first start Aerial prints two randomly generated app passwords
+(admin/user) **once** to the terminal — store them. They are then kept only
+as scrypt hashes in `data/auth.json` (gitignored). Regenerate by deleting
+the `data/` directory.
 
-Neue Passwörter generieren:
+Open `http://localhost:8080`, log in, add your IPTV profile — done.
 
-```bash
-rm -rf data && npm start
-```
+### Trying it without a real provider
 
-Ohne konfigurierte Xtream-Daten startet der Server ebenfalls (leere Senderliste,
-„NO SIGNAL“). Zum lokalen Ausprobieren gibt es einen Mock-Provider:
+A CORS-enabled mock Xtream server is bundled:
 
 ```bash
 node scripts/mock-xtream.js 8090
-XTREAM_HOST=http://127.0.0.1:8090 XTREAM_USERNAME=user XTREAM_PASSWORD=pass npm start
+npm start
+# In the app: add Xtream profile → http://127.0.0.1:8090, user "user", pass "pass"
 ```
 
-## Konfiguration (`.env`)
+## 📡 Provider support & browser compatibility
 
-| Variable | Default | Bedeutung |
+Because Aerial connects **directly** to your provider, browser rules apply:
+
+| Scenario | Works? |
+| --- | --- |
+| iOS / Safari — HLS stream URL in `<video>` | ✅ media playback needs no CORS |
+| Other browsers — hls.js fetches playlists/segments | ⚠️ only if your provider sends CORS headers (many Xtream panels do) |
+| Xtream `player_api.php` (catalog/EPG), M3U & XMLTV fetches | ⚠️ provider/hosting dependent (CORS) |
+| HTTPS app + HTTP provider | ❌ blocked by the browser (mixed content) |
+| Raw MPEG-TS (`.ts`) streams | ✅ Safari native · ❌ Chromium/Firefox (clear error message) |
+
+Aerial detects all of these and shows **clear, actionable German error
+messages** instead of silent failures. There is deliberately **no** CORS
+bypass, `no-cors` hack, or hidden relay — a provider that refuses browser
+connections simply cannot be used from the browser.
+
+## ⚙️ Configuration (`.env`)
+
+Copy [`.env.example`](.env.example) to `.env`. Everything is optional:
+
+| Variable | Default | Description |
 | --- | --- | --- |
-| `XTREAM_HOST` | – | Basis-URL des Xtream-Servers (ohne Pfad/Trailing Slash) |
-| `XTREAM_USERNAME` / `XTREAM_PASSWORD` | – | Xtream-Zugang (nur Backend) |
-| `PORT` | `8080` | HTTP-Port |
-| `SESSION_TTL_MS` | `86400000` | Session-Laufzeit |
-| `USER_IDLE_MINUTES` | `30` | Sperre für User nach Admin-Aktivität |
-| `CHANNEL_CACHE_MS` | `60000` | Cache für Kategorien/Sender |
-| `EPG_CACHE_MS` | `30000` | Cache für EPG |
-| `PROXY_TOKEN_TTL_MS` | `180000` | Idle-TTL der Stream-Proxy-Tokens |
+| `PORT` | `8080` | HTTP port |
+| `SESSION_TTL_MS` | `86400000` | App session lifetime (24 h) |
+| `COOKIE_SECURE` | `auto` | Session cookie `Secure` flag: `auto` (set on HTTPS), `true`, `false` |
+| `TRUST_PROXY` | `false` | Express `trust proxy` (hops/`loopback`/CIDR) behind a reverse proxy |
+| `LOGIN_MAX_ATTEMPTS` | `8` | Failed logins per IP before `429` |
+| `LOGIN_WINDOW_MS` | `300000` | Rate-limit window (5 min) |
 
-## Sicherheitsmodell
+## 🔐 Security model
 
-- **Zugangsdaten bleiben serverseitig.** Der Browser erhält ausschließlich
-  undurchsichtige, zufällige Proxy-Tokens (`/api/stream/:id/raw/:token`),
-  niemals die Xtream-URLs, die Pfade oder die Credentials.
-- **Single Stream wird erzwungen.** Nur der aktuell aktive Sender ist streambar;
-  jede Anfrage an einen anderen Sender wird mit `409` abgewiesen. Wechsel sind
-  durch eine Mutex serialisiert und erhöhen eine Stream-Epoche, die alle alten
-  Tokens invalidiert.
-- **30-Minuten-Sperre wird serverseitig geprüft** (`403 user_locked`). Der
-  Zeitstempel der letzten Admin-Aktivität überlebt Server-Neustarts.
-- **Login-Rate-Limiting** pro IP, Passwörter als scrypt-Hash, Sessions als
-  httpOnly-Cookie, kryptografisch zufällige Tokens.
+- **Provider credentials never touch the Aerial server.** They live in your
+  browser: in-memory by default; persisted only when you explicitly enable
+  *"save on this device"* per profile. Logout drops in-memory secrets;
+  opt-in secrets remain (your choice, your device).
+- **localStorage risk assessment** (deliberate trade-off): profiles must
+  survive app restarts while the server must never see the data — that
+  leaves client-side persistence. Protections: per-profile keys, opt-in
+  secrets only, strict CSP (`script-src 'self'`, no `unsafe-inline`) which
+  makes XSS practically impossible, `referrerPolicy: no-referrer` on
+  provider logos, no third-party scripts. Residual risk: a same-origin XSS
+  could read opt-in secrets. Possible future upgrade: WebCrypto-encrypted
+  storage with a passphrase-derived key.
+- **App login ≠ IPTV accounts.** The Aerial login (admin/user, scrypt
+  hashes, per-IP rate limiting) only gates the app itself.
+- **Strict CSP** — app code is same-origin only; `media-src`/`connect-src`/
+  `img-src` intentionally allow arbitrary origins because *your* provider is
+  chosen at runtime. Browser mixed-content rules stay in effect.
+- Full policy and reporting: [SECURITY.md](SECURITY.md)
 
-## API (Auszug)
-
-| Methode & Pfad | Rolle | Zweck |
-| --- | --- | --- |
-| `POST /api/auth/login` | – | Login (`{role, password}`) |
-| `POST /api/auth/logout` | – | Logout |
-| `GET /api/auth/me` | – | Session + aktueller Zustand |
-| `GET /api/channels` | beliebig | Kategorien + Sender (Logos proxied) |
-| `GET /api/epg/:streamId` | beliebig | Kurz-EPG |
-| `POST /api/control/play` | admin/user | Start/Wechsel (User nur nach Sperre) |
-| `POST /api/control/stop` | admin | Stop |
-| `GET /api/stream/:id/playlist.m3u8` | beliebig | HLS-Playlist des aktiven Senders |
-| `GET /api/stream/:id/raw/:token` | beliebig | Proxied Segment/Playlist |
-| `GET /api/media/:token` | beliebig | Proxied Senderlogos |
-| `GET /api/events` | beliebig | SSE-Live-Zustand |
-
-## Struktur
-
-```
-src/
-  config.js    Konfiguration + .env-Loader
-  auth.js      Passwort-Generierung, scrypt, Sessions, Rate-Limit
-  store.js     JSON-Persistenz (Passwort-Hashes, letzte Admin-Aktivität)
-  xtream.js    Xtream-Client (Katalog/EPG, Caching)
-  stream.js    Globaler Stream-Zustand, Mutex, Proxy-Tokens, SSE
-  routes.js    Express-Routen
-  server.js    Einstiegspunkt
-public/        Frontend (Vanilla JS + CSS, hls.js vendored)
-scripts/       Mock-Xtream für lokale Tests
-test/          Unit- + End-to-End-Tests
-```
-
-## Tests
+## 🧪 Development
 
 ```bash
-npm test
+npm test     # 39 tests: auth, provider adapters, PWA assets, security, e2e
+npm run dev  # auto-reload dev server
 ```
 
-Deckt ab: Passwort-Hashing/Sessions/Rate-Limit, 30-Minuten-Sperre,
-Mutex-Serialisierung (Race Conditions), Single-Stream-Durchsetzung,
-Playlist-Rewriting (keine Credential-Leaks) sowie ein End-to-End-Test gegen
-einen Mock-Xtream-Server (Login → Play → Playlist → Segment, alles opaque).
+The stack is intentionally vanilla: **no bundler, no framework, no
+TypeScript**. Zero build step is a feature.
+
+```
+src/                  server: login, static hosting, security headers (no streaming)
+public/
+  index.html          app shell (login, onboarding, player, profiles)
+  app.js              client app (ES module): profiles, player, EPG, lifecycle
+  js/providers/       Xtream / M3U / XMLTV adapters (client → provider, direct)
+  js/profiles.js      profile store (opt-in secrets, per-profile data)
+  vendor/             hls.js 1.7.0 (vendored — see THIRD_PARTY_NOTICES.md)
+test/                 node:test suites
+scripts/              mock provider, icon generator
+assets/               brand master (logo.svg)
+```
+
+Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+Changelog: [CHANGELOG.md](CHANGELOG.md).
+
+## 📝 Disclaimer
+
+Aerial does not host, sell, or provide IPTV subscriptions and does not ship
+any content, playlists, or channels. Users connect their own providers and
+are responsible for complying with their provider's terms and applicable
+law.
+
+## 📄 License
+
+Released under the [MIT License](LICENSE) © 2026 CRZX1337.
+Vendored [hls.js](https://github.com/video-dev/hls.js) is Apache-2.0 — see
+[public/vendor/THIRD_PARTY_NOTICES.md](public/vendor/THIRD_PARTY_NOTICES.md).

@@ -3,13 +3,15 @@ import path from 'node:path';
 import { DATA_DIR } from './config.js';
 
 /**
- * Small JSON file store. Keeps things that must survive restarts:
- *  - the two password hashes (never the plaintext)
- *  - the timestamp of the last admin activity (so the 30min user lock survives restarts)
+ * Small JSON file store. Keeps the Aerial app-account password hashes
+ * (never plaintext) across restarts.
+ *
+ * IPTV provider credentials are NOT stored here: in the player model the
+ * browser talks to the user's own provider directly and the server never
+ * sees provider credentials at all.
  */
 
 const AUTH_FILE = path.join(DATA_DIR, 'auth.json');
-const STATE_FILE = path.join(DATA_DIR, 'state.json');
 
 function ensureDir() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -36,12 +38,4 @@ export function loadAuth() {
 
 export function saveAuth(auth) {
   writeJsonAtomic(AUTH_FILE, auth);
-}
-
-export function loadState() {
-  return readJson(STATE_FILE, { lastAdminAt: 0 });
-}
-
-export function saveState(state) {
-  writeJsonAtomic(STATE_FILE, state);
 }

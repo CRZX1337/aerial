@@ -1,8 +1,9 @@
 /* ============================================================
-   HOODTV — Liquid Glass design system
+   Aerial — Liquid Glass design system
    ============================================================ */
 
 :root {
+  color-scheme: dark;
   --bg: #06060a;
   --bg-elev: #0c0c13;
 
@@ -43,7 +44,7 @@
 
 html, body { margin: 0; padding: 0; height: 100%; }
 
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; background: #06060a; }
 
 body {
   background: var(--bg);
@@ -57,6 +58,18 @@ body {
   overflow: hidden;
   overscroll-behavior: none;
   font-feature-settings: "kern" 1;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+button, .btn, .tab, .chip, .channel-card, .icon-btn, .role-btn, .category-chips .chip {
+  touch-action: manipulation;
+}
+
+input, [contenteditable="true"], .guide-item-desc {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .hidden { display: none !important; }
@@ -511,6 +524,7 @@ body {
   border-radius: 999px;
 }
 .chip-glass:empty { display: none; }
+.chip-glass.pointer { pointer-events: auto; cursor: pointer; }
 
 .player-scrim {
   position: absolute;
@@ -551,6 +565,73 @@ body {
   letter-spacing: 0.2px;
 }
 .offline-sub { color: var(--text-3); font-size: 13px; }
+
+/* ---------------------------------------------------------------
+   Player overlays: autoplay-blocked (tap to play) + stream error
+   --------------------------------------------------------------- */
+.player-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 20px;
+  background: radial-gradient(ellipse at center, rgba(93, 124, 255, 0.08), transparent 60%), rgba(2, 2, 5, 0.72);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+.player-overlay.error {
+  background: radial-gradient(ellipse at center, rgba(255, 92, 122, 0.1), transparent 60%), rgba(2, 2, 5, 0.78);
+}
+
+.player-overlay-text {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--text);
+  text-align: center;
+}
+
+.play-overlay-btn {
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: var(--grad);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  box-shadow: 0 18px 44px rgba(79, 124, 255, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  transition: transform 0.16s var(--ease), box-shadow 0.16s var(--ease);
+  animation: overlay-pulse 2.6s ease-in-out infinite;
+}
+.play-overlay-btn:active { transform: scale(0.93); }
+.play-overlay-btn svg { width: 34px; height: 34px; margin-left: 4px; }
+
+.player-overlay-icon {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 92, 122, 0.14);
+  border: 1px solid rgba(255, 92, 122, 0.35);
+  color: var(--danger);
+}
+.player-overlay-icon svg { width: 26px; height: 26px; }
+
+@keyframes overlay-pulse {
+  0%, 100% { box-shadow: 0 18px 44px rgba(79, 124, 255, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.28); }
+  50% { box-shadow: 0 18px 54px rgba(79, 124, 255, 0.62), inset 0 1px 0 rgba(255, 255, 255, 0.28); }
+}
 
 /* ============================================================
    Now playing bar
@@ -951,6 +1032,272 @@ body {
 }
 
 /* ============================================================
+   Onboarding / unlock / profile modal
+   ============================================================ */
+.onboard-view {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-height: 0;
+}
+
+.onboard-card {
+  width: min(94vw, 430px);
+  max-height: calc(100dvh - var(--safe-top) - var(--safe-bottom) - 96px);
+  overflow-y: auto;
+  padding: 28px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.onboard-step,
+#onboard-form,
+#unlock-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.onboard-step-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.type-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.type-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 16px 18px;
+  border-radius: var(--r-md);
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  color: var(--text);
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s, transform 0.15s var(--ease);
+  text-align: left;
+}
+.type-card:active { transform: scale(0.98); }
+.type-card:hover { border-color: rgba(93, 124, 255, 0.45); background: var(--glass-strong); }
+.type-card.selected {
+  border-color: rgba(93, 124, 255, 0.65);
+  background: rgba(93, 124, 255, 0.1);
+}
+.type-card svg { width: 24px; height: 24px; color: var(--accent-2); }
+.type-card-title { font-size: 15px; font-weight: 700; }
+.type-card-sub { font-size: 12.5px; color: var(--text-3); }
+
+.check-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13.5px;
+  color: var(--text-2);
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.check-field input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
+.onboard-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.input-wrap select {
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 15px;
+  padding: 0;
+}
+.input-wrap select option {
+  background: #101018;
+  color: var(--text);
+}
+
+/* ============================================================
+   Profile list
+   ============================================================ */
+.profile-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.profile-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: var(--r-md);
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+}
+
+.profile-card.active {
+  border-color: rgba(52, 227, 160, 0.5);
+  background: rgba(52, 227, 160, 0.06);
+}
+
+.profile-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 13px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--grad-soft);
+  border: 1px solid var(--glass-border);
+  font-weight: 700;
+  font-size: 17px;
+  color: var(--text);
+}
+
+.profile-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.profile-name {
+  font-size: 14.5px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profile-meta {
+  font-size: 12px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profile-status {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ok);
+}
+.profile-status.locked { color: var(--warn); }
+
+.profile-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.icon-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+}
+.icon-btn svg { width: 18px; height: 18px; }
+.icon-btn:hover { color: var(--text); border-color: var(--glass-highlight); }
+.icon-btn.danger:hover { color: var(--danger); border-color: rgba(255, 92, 122, 0.4); }
+.icon-btn.armed {
+  color: #fff;
+  background: rgba(255, 92, 122, 0.3);
+  border-color: var(--danger);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.profile-note {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-3);
+  padding: 12px 14px;
+  border-radius: var(--r-sm);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* ============================================================
+   Modal
+   ============================================================ */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: calc(16px + var(--safe-top)) calc(16px + var(--safe-right)) calc(16px + var(--safe-bottom)) calc(16px + var(--safe-left));
+  background: rgba(3, 3, 6, 0.62);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  animation: fade-in 0.22s var(--ease) both;
+}
+
+.modal-card {
+  animation: modal-in 0.3s var(--ease) both;
+  max-height: calc(100dvh - 64px);
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(18px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ============================================================
+   Catalog error card
+   ============================================================ */
+.error-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+  border-radius: var(--r-md);
+  background: rgba(255, 92, 122, 0.06);
+  border: 1px solid rgba(255, 92, 122, 0.28);
+}
+.error-title {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: #ffb3c0;
+}
+.error-msg {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+
+/* ============================================================
    Bottom tab bar (mobile)
    ============================================================ */
 .tabbar {
@@ -1031,15 +1378,17 @@ body {
     grid-template-columns: minmax(0, 1fr) 400px;
     grid-template-areas:
       "stage browser"
-      "guide browser";
+      "guide browser"
+      "profiles profiles";
     gap: 18px;
     align-items: start;
     max-width: 1280px;
     margin: 0 auto;
   }
-  .pane { display: flex; }
+  .pane:not(.profiles) { display: flex; }
   .stage { grid-area: stage; }
   .guide { grid-area: guide; }
+  .profiles { grid-area: profiles; }
   .browser {
     grid-area: browser;
     position: sticky;

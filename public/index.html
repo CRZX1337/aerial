@@ -3,12 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
   <meta name="theme-color" content="#06060a" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="HOODTV" />
-  <title>HOODTV</title>
-  <link rel="stylesheet" href="/styles.css?v=4" />
+  <meta name="apple-mobile-web-app-title" content="Aerial" />
+  <title>Aerial</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
+  <link rel="stylesheet" href="/styles.css?v=7" />
 </head>
 <body>
   <!-- Ambient liquid-glass background -->
@@ -23,38 +28,38 @@
     <div class="brand">
       <svg class="brand-mark" viewBox="0 0 40 40" aria-hidden="true">
         <defs>
-          <linearGradient id="htv-grad" x1="0" y1="0" x2="1" y2="1">
+          <linearGradient id="aerial-grad" x1="0" y1="0" x2="1" y2="1">
             <stop offset="0" stop-color="#8b5cf6" />
             <stop offset=".55" stop-color="#4f7cff" />
             <stop offset="1" stop-color="#2dd4ff" />
           </linearGradient>
         </defs>
-        <rect x="2" y="2" width="36" height="36" rx="11" fill="url(#htv-grad)" />
+        <rect x="2" y="2" width="36" height="36" rx="11" fill="url(#aerial-grad)" />
         <path d="M16 12.5v15l13-7.5z" fill="#fff" />
       </svg>
-      <span class="brand-name">HOOD<span class="brand-accent">TV</span></span>
+      <span class="brand-name">Aeri<span class="brand-accent">al</span></span>
     </div>
     <div class="topbar-right">
       <span id="role-badge" class="role-badge hidden"></span>
-      <span id="conn-dot" class="conn-dot" title="Verbindungsstatus"></span>
+      <span id="conn-dot" class="conn-dot" title="Provider-Verbindungsstatus"></span>
       <button id="logout-btn" class="btn btn-ghost hidden">Abmelden</button>
     </div>
   </header>
 
   <main id="main">
-    <!-- LOGIN -->
+    <!-- LOGIN (Aerial app account) -->
     <section id="login-view" class="view login-view hidden">
       <div class="login-card glass">
         <svg class="login-mark" viewBox="0 0 40 40" aria-hidden="true">
-          <rect x="2" y="2" width="36" height="36" rx="11" fill="url(#htv-grad)" />
+          <rect x="2" y="2" width="36" height="36" rx="11" fill="url(#aerial-grad)" />
           <path d="M16 12.5v15l13-7.5z" fill="#fff" />
         </svg>
         <h1 class="login-title">Willkommen zurück</h1>
-        <p class="login-sub">Melde dich an, um HOODTV zu streamen.</p>
+        <p class="login-sub">Melde dich an, um Aerial zu nutzen.</p>
 
         <div class="role-toggle" role="tablist">
-          <button class="role-btn" data-role="user" role="tab" aria-selected="false">User</button>
-          <button class="role-btn active" data-role="admin" role="tab" aria-selected="true">Admin</button>
+          <button class="role-btn active" data-role="user" role="tab" aria-selected="true">User</button>
+          <button class="role-btn" data-role="admin" role="tab" aria-selected="false">Admin</button>
         </div>
 
         <form id="login-form" autocomplete="off">
@@ -75,6 +80,107 @@
       </div>
     </section>
 
+    <!-- ONBOARDING (first start, no provider profile yet) -->
+    <section id="onboard-view" class="view onboard-view hidden">
+      <div class="onboard-card glass">
+        <svg class="login-mark" viewBox="0 0 40 40" aria-hidden="true">
+          <rect x="2" y="2" width="36" height="36" rx="11" fill="url(#aerial-grad)" />
+          <path d="M16 12.5v15l13-7.5z" fill="#fff" />
+        </svg>
+        <h1 class="login-title">Willkommen bei Aerial</h1>
+        <p class="login-sub">Verbinde deinen eigenen IPTV-Zugang. Aerial ist der Player — deine Daten bleiben auf deinem Gerät.</p>
+
+        <div id="onboard-step-type" class="onboard-step">
+          <div class="onboard-step-label">Verbindungstyp wählen</div>
+          <div class="type-cards">
+            <button class="type-card" data-type="xtream" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="12.5" rx="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m9.5 20.5 5-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+              <span class="type-card-title">Xtream Codes</span>
+              <span class="type-card-sub">Server-URL, Benutzer, Passwort</span>
+            </button>
+            <button class="type-card" data-type="m3u" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+              <span class="type-card-title">M3U Playlist</span>
+              <span class="type-card-sub">Playlist-URL, optional EPG-URL</span>
+            </button>
+          </div>
+        </div>
+
+        <form id="onboard-form" class="onboard-step hidden" autocomplete="off">
+          <div class="onboard-step-label" id="onboard-form-title">Konto hinzufügen</div>
+          <label class="field">
+            <span class="field-label">Profilname</span>
+            <div class="input-wrap">
+              <input id="ob-name" type="text" autocapitalize="none" autocomplete="off" placeholder="Mein IPTV" required />
+            </div>
+          </label>
+          <label class="field" id="ob-host-field">
+            <span class="field-label" id="ob-host-label">Server-URL</span>
+            <div class="input-wrap">
+              <input id="ob-host" type="url" inputmode="url" autocapitalize="none" autocomplete="off"
+                     placeholder="http://dein-provider.example:8080" required />
+            </div>
+          </label>
+          <label class="field" id="ob-user-field">
+            <span class="field-label">Benutzername</span>
+            <div class="input-wrap">
+              <input id="ob-username" type="text" autocapitalize="none" autocomplete="off" placeholder="Benutzer" required />
+            </div>
+          </label>
+          <label class="field" id="ob-pass-field">
+            <span class="field-label">Passwort</span>
+            <div class="input-wrap">
+              <input id="ob-password" type="password" autocapitalize="none" autocomplete="new-password" placeholder="••••••••" required />
+            </div>
+          </label>
+          <label class="field hidden" id="ob-epg-field">
+            <span class="field-label">EPG-URL (optional, XMLTV)</span>
+            <div class="input-wrap">
+              <input id="ob-epg" type="url" inputmode="url" autocapitalize="none" autocomplete="off" placeholder="http://epg.example/guide.xml" />
+            </div>
+          </label>
+          <label class="check-field" id="ob-remember-field">
+            <input id="ob-remember" type="checkbox" />
+            <span>Passwort auf diesem Gerät speichern</span>
+          </label>
+          <div class="onboard-actions">
+            <button id="ob-back" class="btn btn-ghost" type="button">Zurück</button>
+            <button id="ob-submit" class="btn btn-primary" type="submit">
+              <span>Verbinden &amp; testen</span>
+            </button>
+          </div>
+        </form>
+        <p id="onboard-error" class="login-error" role="alert"></p>
+      </div>
+    </section>
+
+    <!-- PROFILE UNLOCK (active profile without stored credentials) -->
+    <section id="unlock-view" class="view onboard-view hidden">
+      <div class="onboard-card glass">
+        <h1 class="login-title" id="unlock-title">Profil entsperren</h1>
+        <p class="login-sub" id="unlock-sub">Gib das Passwort deines IPTV-Zugangs ein.</p>
+        <form id="unlock-form" autocomplete="off">
+          <label class="field">
+            <span class="field-label">IPTV-Passwort</span>
+            <div class="input-wrap">
+              <input id="unlock-password" type="password" autocapitalize="none" autocomplete="current-password" placeholder="••••••••" required />
+            </div>
+          </label>
+          <label class="check-field">
+            <input id="unlock-remember" type="checkbox" />
+            <span>Auf diesem Gerät speichern</span>
+          </label>
+          <div class="onboard-actions">
+            <button id="unlock-cancel" class="btn btn-ghost" type="button">Abbrechen</button>
+            <button id="unlock-submit" class="btn btn-primary" type="submit">
+              <span>Verbinden</span>
+            </button>
+          </div>
+        </form>
+        <p id="unlock-error" class="login-error" role="alert"></p>
+      </div>
+    </section>
+
     <!-- APP -->
     <section id="app-view" class="view app-view hidden">
       <div class="layout">
@@ -88,13 +194,30 @@
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
               </div>
               <div class="offline-text">Kein Signal</div>
-              <div class="offline-sub">Der Stream ist derzeit offline</div>
+              <div class="offline-sub">Wähle unten einen Sender</div>
             </div>
             <div class="player-top">
               <span id="live-badge" class="live-badge hidden"><i></i>LIVE</span>
-              <span id="streaming-user" class="chip-glass"></span>
+              <span id="profile-chip" class="chip-glass"></span>
             </div>
             <div class="player-scrim" aria-hidden="true"></div>
+
+            <div id="play-overlay" class="player-overlay hidden">
+              <button id="play-overlay-btn" class="play-overlay-btn" type="button" aria-label="Wiedergabe starten">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+              </button>
+              <div class="player-overlay-text">Tippen zum Starten</div>
+            </div>
+
+            <div id="player-error" class="player-overlay error hidden" role="alert">
+              <div class="player-overlay-icon">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8v5m0 3.5v.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+              </div>
+              <div id="player-error-msg" class="player-overlay-text">Stream-Fehler</div>
+              <button id="player-retry-btn" class="btn btn-primary" type="button">
+                <span>Erneut versuchen</span>
+              </button>
+            </div>
           </div>
 
           <div class="now-bar glass">
@@ -103,11 +226,10 @@
               <div id="channel-meta" class="channel-meta"></div>
             </div>
             <div class="now-actions">
-              <button id="stop-btn" class="btn btn-danger hidden">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/></svg>
-                <span>Stopp</span>
+              <button id="switch-btn" class="btn btn-primary">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="12.5" rx="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m9.5 20.5 5-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+                <span>Sender</span>
               </button>
-              <div id="lock-info" class="lock-info hidden"></div>
             </div>
           </div>
 
@@ -151,8 +273,88 @@
           <div id="guide-list" class="guide-list"></div>
         </section>
 
+        <!-- PROFILES -->
+        <section class="pane profiles" data-pane="profiles">
+          <div class="guide-head">
+            <div>
+              <div class="guide-kicker">IPTV-Zugänge</div>
+              <div class="guide-title">Profile</div>
+            </div>
+            <button id="profile-add-btn" class="btn btn-primary">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              <span>Hinzufügen</span>
+            </button>
+          </div>
+          <div id="profile-list" class="profile-list"></div>
+          <div class="profile-note">
+            Aerial hostet kein IPTV. Jedes Profil verbindet sich direkt von deinem Gerät
+            mit deinem eigenen Anbieter. Passwörter werden nur bei aktiviertem
+            „Auf diesem Gerät speichern“ lokal abgelegt — nie auf dem Aerial-Server.
+          </div>
+        </section>
+
       </div>
     </section>
+
+    <!-- PROFILE FORM MODAL (add / edit) -->
+    <div id="profile-modal-backdrop" class="modal-backdrop hidden">
+      <div id="profile-modal" class="onboard-card glass modal-card" role="dialog" aria-modal="true" aria-labelledby="pm-title">
+        <div class="onboard-step-label" id="pm-title">Profil</div>
+        <form id="profile-form" autocomplete="off">
+          <label class="field">
+            <span class="field-label">Profilname</span>
+            <div class="input-wrap">
+              <input id="pm-name" type="text" autocapitalize="none" autocomplete="off" placeholder="Mein IPTV" required />
+            </div>
+          </label>
+          <label class="field" id="pm-type-field">
+            <span class="field-label">Typ</span>
+            <div class="input-wrap">
+              <select id="pm-type">
+                <option value="xtream">Xtream Codes</option>
+                <option value="m3u">M3U Playlist</option>
+              </select>
+            </div>
+          </label>
+          <label class="field" id="pm-host-field">
+            <span class="field-label" id="pm-host-label">Server-URL</span>
+            <div class="input-wrap">
+              <input id="pm-host" type="url" inputmode="url" autocapitalize="none" autocomplete="off"
+                     placeholder="http://dein-provider.example:8080" required />
+            </div>
+          </label>
+          <label class="field" id="pm-user-field">
+            <span class="field-label">Benutzername</span>
+            <div class="input-wrap">
+              <input id="pm-username" type="text" autocapitalize="none" autocomplete="off" placeholder="Benutzer" />
+            </div>
+          </label>
+          <label class="field" id="pm-pass-field">
+            <span class="field-label">Passwort</span>
+            <div class="input-wrap">
+              <input id="pm-password" type="password" autocapitalize="none" autocomplete="new-password" placeholder="leer lassen = unverändert" />
+            </div>
+          </label>
+          <label class="field hidden" id="pm-epg-field">
+            <span class="field-label">EPG-URL (optional, XMLTV)</span>
+            <div class="input-wrap">
+              <input id="pm-epg" type="url" inputmode="url" autocapitalize="none" autocomplete="off" placeholder="http://epg.example/guide.xml" />
+            </div>
+          </label>
+          <label class="check-field" id="pm-remember-field">
+            <input id="pm-remember" type="checkbox" />
+            <span>Passwort auf diesem Gerät speichern</span>
+          </label>
+          <div class="onboard-actions">
+            <button id="pm-cancel" class="btn btn-ghost" type="button">Abbrechen</button>
+            <button id="pm-submit" class="btn btn-primary" type="submit">
+              <span>Speichern</span>
+            </button>
+          </div>
+        </form>
+        <p id="pm-error" class="login-error" role="alert"></p>
+      </div>
+    </div>
   </main>
 
   <!-- MOBILE BOTTOM NAV -->
@@ -169,11 +371,15 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
       <span>Guide</span>
     </button>
+    <button class="tab" data-pane="profiles" aria-selected="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M4.5 20.5c1.5-3.5 4-5 7.5-5s6 1.5 7.5 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+      <span>Profile</span>
+    </button>
   </nav>
 
   <div id="toasts" class="toasts" aria-live="polite"></div>
 
   <script src="/vendor/hls.min.js"></script>
-  <script src="/app.js?v=4"></script>
+  <script type="module" src="/app.js?v=7"></script>
 </body>
 </html>

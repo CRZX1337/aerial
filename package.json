@@ -1,19 +1,43 @@
 {
-  "name": "hoodtv",
-  "version": "1.0.0",
-  "description": "HOODTV - standalone IPTV web platform with a single global Xtream stream",
+  "name": "aerial",
+  "version": "0.1.0",
+  "description": "Aerial - a sleek, privacy-first IPTV player PWA. Bring your own provider (Xtream Codes, M3U, XMLTV).",
   "type": "module",
   "private": true,
+  "license": "MIT",
+  "author": "CRZX1337",
+  "homepage": "https://github.com/CRZX1337/aerial#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CRZX1337/aerial.git"
+  },
+  "bugs": {
+    "url": "https://github.com/CRZX1337/aerial/issues"
+  },
+  "keywords": [
+    "iptv",
+    "player",
+    "xtream",
+    "xtream-codes",
+    "m3u",
+    "m3u8",
+    "xmltv",
+    "epg",
+    "hls",
+    "pwa",
+    "ios"
+  ],
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "icons": "powershell -ExecutionPolicy Bypass -File scripts/generate-icons.ps1"
   },
   "dependencies": {
     "express": "^4.21.2",
-    "hls.js": "^1.6.2"
+    "hls.js": "^1.7.0"
   }
 }

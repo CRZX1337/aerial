@@ -1,8 +1,12 @@
 /**
- * Standalone mock Xtream server for manual/visual testing of HOODTV without a
- * real provider. Run it, then point XTREAM_HOST at it in .env.
+ * Standalone mock Xtream server for manual/visual testing of Aerial without
+ * a real provider. Run it, then add a profile in the app:
  *
  *   node scripts/mock-xtream.js 8090
+ *   -> Xtream profile: http://127.0.0.1:8090, user: user, pass: pass
+ *
+ * Sends permissive CORS headers so the browser (Aerial client) can talk to
+ * it directly — like many real Xtream panels do.
  */
 import http from 'node:http';
 
@@ -51,13 +55,32 @@ const logoPng = Buffer.from(
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://local');
+
+  const cors = {
+    'access-control-allow-origin': '*',
+    'access-control-allow-methods': 'GET, OPTIONS',
+    'access-control-allow-headers': '*',
+  };
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, cors);
+    return res.end();
+  }
+
   const send = (body, type, status = 200) => {
-    res.writeHead(status, { 'content-type': type });
+    res.writeHead(status, { 'content-type': type, ...cors });
     res.end(body);
   };
 
   if (url.pathname === '/player_api.php') {
     const action = url.searchParams.get('action');
+    const user = url.searchParams.get('username');
+    const pass = url.searchParams.get('password');
+    if (user !== 'user' || pass !== 'pass') {
+      return send(JSON.stringify({ user_info: { auth: 0 } }), 'application/json');
+    }
+    if (!action) {
+      return send(JSON.stringify({ user_info: { auth: 1, status: 'Active' } }), 'application/json');
+    }
     if (action === 'get_live_categories') return send(JSON.stringify(categories), 'application/json');
     if (action === 'get_live_streams') return send(JSON.stringify(streams), 'application/json');
     if (action === 'get_short_epg') {
@@ -85,6 +108,6 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(port, '127.0.0.1', () => {
-  console.log(`Mock Xtream running at http://127.0.0.1:${port}`);
-  console.log(`Set XTREAM_HOST=http://127.0.0.1:${port} XTREAM_USERNAME=user XTREAM_PASSWORD=pass`);
+  console.log(`Mock Xtream running at http://127.0.0.1:${port} (CORS enabled)`);
+  console.log(`Add profile in Aerial: Xtream, host http://127.0.0.1:${port}, user "user", pass "pass"`);
 });

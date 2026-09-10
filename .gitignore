@@ -1,5 +1,37 @@
+# Dependencies
 node_modules/
+
+# Runtime data (password hashes — generated at first start)
 data/
+
+# Environment / secrets
 .env
+.env.*
+!.env.example
+
+# Logs
 *.log
+logs/
+
+# OS artifacts
 .DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-*
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# Local tooling artifacts
+.freebuff/
+
+# Temp files
+*.tmp
+*.temp

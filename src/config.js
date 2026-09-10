@@ -34,43 +34,36 @@ function intEnv(name, fallback) {
   return Number.isFinite(v) ? v : fallback;
 }
 
-function normalizeHost(host) {
-  if (!host) return null;
-  let h = host.trim();
-  if (h.endsWith('/')) h = h.slice(0, -1);
-  return h;
+function parseTrustProxy(v) {
+  if (v === undefined || v === '' || v === 'false' || v === '0') return false;
+  if (v === 'true' || v === '1') return true;
+  const n = Number.parseInt(v, 10);
+  return Number.isFinite(n) ? n : v; // 'loopback', 'uniquelocal', CIDR
+}
+
+function parseCookieSecure(v) {
+  if (v === undefined || v === '' || v === 'auto') return 'auto';
+  return v === 'true' || v === '1';
 }
 
 export const ROOT_DIR = ROOT;
-export const DATA_DIR = process.env.HOODTV_DATA_DIR
-  ? path.resolve(process.env.HOODTV_DATA_DIR)
+export const DATA_DIR = process.env.AERIAL_DATA_DIR
+  ? path.resolve(process.env.AERIAL_DATA_DIR)
   : path.join(ROOT, 'data');
 
 export const config = {
   port: intEnv('PORT', 8080),
   host: process.env.HOST || '0.0.0.0',
 
-  xtreamHost: normalizeHost(process.env.XTREAM_HOST),
-  xtreamUsername: process.env.XTREAM_USERNAME || '',
-  xtreamPassword: process.env.XTREAM_PASSWORD || '',
-
   sessionTtlMs: intEnv('SESSION_TTL_MS', 24 * 60 * 60 * 1000),
-  userIdleMinutes: intEnv('USER_IDLE_MINUTES', 30),
-  channelCacheMs: intEnv('CHANNEL_CACHE_MS', 60_000),
-  epgCacheMs: intEnv('EPG_CACHE_MS', 30_000),
-  proxyTokenTtlMs: intEnv('PROXY_TOKEN_TTL_MS', 180_000),
 
   loginMaxAttempts: intEnv('LOGIN_MAX_ATTEMPTS', 8),
   loginWindowMs: intEnv('LOGIN_WINDOW_MS', 5 * 60 * 1000),
+
+  // 'auto' (default): Secure flag when the request looks like HTTPS.
+  // true/false forces the behaviour (set true when serving behind TLS).
+  cookieSecure: parseCookieSecure(process.env.COOKIE_SECURE),
+  // Express `trust proxy` setting: false (default), true, hop count,
+  // 'loopback', 'uniquelocal' or CIDR — see Express docs.
+  trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
 };
-
-export const xtreamConfigured = Boolean(
-  config.xtreamHost && config.xtreamUsername && config.xtreamPassword,
-);
-
-export const userIdleMs = config.userIdleMinutes * 60 * 1000;
-
-export function xtreamOrigin() {
-  if (!config.xtreamHost) return null;
-  return new URL(config.xtreamHost);
-}

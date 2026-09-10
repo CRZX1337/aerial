@@ -5,8 +5,8 @@ import path from 'node:path';
 import fs from 'node:fs';
 
 // Isolate persistence before the config module is loaded.
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hoodtv-auth-'));
-process.env.HOODTV_DATA_DIR = tmp;
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aerial-auth-'));
+process.env.AERIAL_DATA_DIR = tmp;
 
 const authMod = await import('../src/auth.js');
 

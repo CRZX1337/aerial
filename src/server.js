@@ -1,8 +1,6 @@
 import http from 'node:http';
-import { config, xtreamConfigured, userIdleMs, ROOT_DIR } from './config.js';
+import { config, ROOT_DIR } from './config.js';
 import { createAuthManager } from './auth.js';
-import { createXtreamClient } from './xtream.js';
-import { createStreamManager } from './stream.js';
 import { buildApp } from './routes.js';
 
 const auth = createAuthManager({
@@ -11,27 +9,16 @@ const auth = createAuthManager({
   windowMs: config.loginWindowMs,
 });
 
-const xtream = createXtreamClient({
-  channelCacheMs: config.channelCacheMs,
-  epgCacheMs: config.epgCacheMs,
-});
-
-const stream = createStreamManager({
-  xtream,
-  userIdleMs,
-  proxyTokenTtlMs: config.proxyTokenTtlMs,
-});
-
-const app = buildApp({ auth, xtream, stream, config, sessionTtlMs: config.sessionTtlMs });
+const app = buildApp({ auth, config, sessionTtlMs: config.sessionTtlMs });
 const server = http.createServer(app);
 
 server.listen(config.port, config.host, () => {
   console.log('');
   console.log('  ═══════════════════════════════════════════════════');
-  console.log('   HOODTV // secure IPTV relay');
+  console.log('   AERIAL // IPTV player (bring your own provider)');
   console.log('  ═══════════════════════════════════════════════════');
   console.log(`   URL:      http://localhost:${config.port}`);
-  console.log(`   Xtream:   ${xtreamConfigured ? config.xtreamHost : 'NOT CONFIGURED (edit .env)'}`);
+  console.log('   Provider: configured in-app per profile (client-side)');
   console.log('  ───────────────────────────────────────────────────');
 
   const creds = auth.consumeGeneratedCredentials();
@@ -51,10 +38,9 @@ server.listen(config.port, config.host, () => {
 });
 
 function shutdown() {
-  console.log('\n[hoodtv] shutting down...');
+  console.log('\n[aerial] shutting down...');
   server.close(() => {
     auth.stop();
-    stream.stopCleanup();
     process.exit(0);
   });
   setTimeout(() => process.exit(0), 3000).unref();
