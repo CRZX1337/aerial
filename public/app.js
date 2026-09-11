@@ -179,7 +179,7 @@ import {
     }
     const res = await fetch(path, init);
     if (res.status === 401) {
-      showLogin();
+      if (window.__AERIAL_AUTH_MODE !== 'open') showLogin();
       throw new Error('unauthorized');
     }
     let data = null;
@@ -263,6 +263,10 @@ import {
 
   els.logoutBtn.addEventListener('click', async () => {
     try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* ignore */ }
+    if (window.__AERIAL_AUTH_MODE === 'open') {
+      toast('App-Modus ohne Login — Anmeldung ist serverseitig deaktiviert.');
+      return;
+    }
     teardownApp();
     showLogin();
   });
@@ -1492,6 +1496,11 @@ import {
 
   // ------------------------------------------------------------------ boot --
   (async function boot() {
+    // Open app mode (server: AUTH_OPEN=true): skip the app login entirely.
+    if (window.__AERIAL_AUTH_MODE === 'open' && window.__AERIAL_OPEN_ROLE) {
+      enterApp(window.__AERIAL_OPEN_ROLE);
+      return;
+    }
     try {
       const me = await api('/api/auth/me');
       if (me.authenticated && me.role) enterApp(me.role);

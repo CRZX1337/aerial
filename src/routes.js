@@ -111,6 +111,11 @@ export function buildApp({ auth, config = {}, sessionTtlMs }) {
   });
 
   app.get('/api/auth/me', (req, res) => {
+    // Open app mode (AUTH_OPEN=true): no app login gate — report the fixed
+    // 'user' role so the client boots straight into the player UI.
+    if (config.authOpen) {
+      return res.json({ authenticated: true, role: 'user', authMode: 'open' });
+    }
     res.json({
       authenticated: Boolean(req.session),
       role: req.session ? req.session.role : null,

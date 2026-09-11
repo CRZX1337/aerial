@@ -46,6 +46,10 @@ function parseCookieSecure(v) {
   return v === 'true' || v === '1';
 }
 
+function parseBool(v) {
+  return v === 'true' || v === '1';
+}
+
 export const ROOT_DIR = ROOT;
 export const DATA_DIR = process.env.AERIAL_DATA_DIR
   ? path.resolve(process.env.AERIAL_DATA_DIR)
@@ -66,4 +70,7 @@ export const config = {
   // Express `trust proxy` setting: false (default), true, hop count,
   // 'loopback', 'uniquelocal' or CIDR — see Express docs.
   trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
+  // AUTH_OPEN=true: no app login gate — the app opens directly and each user
+  // enters their OWN provider credentials client-side (never sent here).
+  authOpen: parseBool(process.env.AUTH_OPEN),
 };

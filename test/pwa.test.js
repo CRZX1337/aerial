@@ -118,7 +118,7 @@ test('index.html has complete iOS/PWA metadata and the player app shell', () => 
   assert.doesNotMatch(html, /<script(?![^>]*src=)[^>]*>/);
 
   // App entry is an ES module (cache-busted)
-  assert.match(html, /<script type="module" src="\/app\.js\?v=7">/);
+  assert.match(html, /<script type="module" src="\/app\.js\?v=8">/);
   // Branding: Aerial
   assert.match(html, /<title>Aerial<\/title>/);
 });

@@ -5,6 +5,22 @@ All notable changes to Aerial are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Open app mode (`AUTH_OPEN=true`)** — run Aerial without the app login
+  gate: the player opens directly and every user enters their own provider
+  credentials client-side (the server never sees them). Opt-in via env,
+  fully reversible; classic admin/user login remains available and all
+  auth endpoints are untouched. Boot order is guaranteed by a tiny
+  `auth-mode.js` bootstrap that runs before the app module.
+
+### Fixed
+
+- `package-lock.json` was stale from the pre-rebrand name (`hoodtv`);
+  regenerated to match `aerial` 0.1.0.
+
 ## [0.1.0] - 2026-09-10
 
 Initial public release.

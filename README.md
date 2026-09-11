@@ -101,6 +101,7 @@ Copy [`.env.example`](.env.example) to `.env`. Everything is optional:
 | `TRUST_PROXY` | `false` | Express `trust proxy` (hops/`loopback`/CIDR) behind a reverse proxy |
 | `LOGIN_MAX_ATTEMPTS` | `8` | Failed logins per IP before `429` |
 | `LOGIN_WINDOW_MS` | `300000` | Rate-limit window (5 min) |
+| `AUTH_OPEN` | `false` | Open app mode: skip the app login gate — the app opens directly; users configure their own providers client-side |
 
 ## 🔐 Security model
 
