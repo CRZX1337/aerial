@@ -13,6 +13,7 @@ const KEY_ACTIVE = 'aerial_active_profile';
 const KEY_SECRET = (id) => `aerial_secret_${id}`;
 const KEY_FAVS = (id) => `aerial_favs_${id}`;
 const KEY_RECENT = (id) => `aerial_recent_${id}`;
+const KEY_CATFAVS = (id) => `aerial_catfavs_${id}`;
 
 function readJson(key, fallback) {
   try {
@@ -73,6 +74,7 @@ export function deleteProfile(id) {
   saveProfiles(list);
   removeKey(KEY_SECRET(id));
   removeKey(KEY_FAVS(id));
+  removeKey(KEY_CATFAVS(id));
   removeKey(KEY_RECENT(id));
   if (getActiveProfileId() === id) setActiveProfileId(list.length ? list[0].id : null);
 }
@@ -108,6 +110,19 @@ export function getFavorites(profileId) {
 
 export function saveFavorites(profileId, set) {
   writeJson(KEY_FAVS(profileId), [...set]);
+}
+
+// ---- per-profile category favorites (pinned categories, separate store) ----
+
+export function getCategoryFavorites(profileId) {
+  const list = readJson(KEY_CATFAVS(profileId), []);
+  return new Set(Array.isArray(list) ? list.filter((x) => typeof x === 'string') : []);
+}
+
+export function saveCategoryFavorites(profileId, set) {
+  // Sets iterate in insertion order — the array (and thus the pinned
+  // section's ordering) stays stable across reloads.
+  writeJson(KEY_CATFAVS(profileId), [...set]);
 }
 
 // ---- per-profile recently watched --------------------------------------------

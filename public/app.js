@@ -1,8 +1,8 @@
-import { XtreamAdapter } from './js/providers/xtream.js?v=15';
-import { M3UAdapter } from './js/providers/m3u.js?v=15';
-import { fetchXmltv, parseXMLTV, shortEpg } from './js/providers/xmltv.js?v=15';
-import { diagnoseStages, httpsTwin } from './js/providers/netcheck.js?v=15';
-import { makeProviderFetch } from './js/providers/relayfetch.js?v=15';
+import { XtreamAdapter } from './js/providers/xtream.js?v=20';
+import { M3UAdapter } from './js/providers/m3u.js?v=20';
+import { fetchXmltv, parseXMLTV, shortEpg } from './js/providers/xmltv.js?v=20';
+import { diagnoseStages, httpsTwin } from './js/providers/netcheck.js?v=20';
+import { makeProviderFetch } from './js/providers/relayfetch.js?v=20';
 import {
   loadProfiles,
   upsertProfile,
@@ -15,9 +15,11 @@ import {
   setRememberedSecret,
   getFavorites,
   saveFavorites,
+  getCategoryFavorites,
+  saveCategoryFavorites,
   getRecent,
   pushRecent,
-} from './js/profiles.js?v=15';
+} from './js/profiles.js?v=20';
 
 (function () {
   'use strict';
@@ -31,6 +33,7 @@ import {
   let channels = [];
   let categories = [];
   let favorites = new Set();
+  let catFavorites = new Set(); // pinned categories (per profile)
   let recent = [];
   let search = '';
   let activeCategory = 'all';
@@ -101,6 +104,7 @@ import {
     searchInput: $('search-input'),
     searchClear: $('search-clear'),
     favToggle: $('fav-toggle'),
+    catSectionLabel: $('cat-section-label'),
     categoryChips: $('category-chips'),
     channelList: $('channel-list'),
     toasts: $('toasts'),
@@ -109,6 +113,20 @@ import {
     playerError: $('player-error'),
     playerErrorMsg: $('player-error-msg'),
     playerRetryBtn: $('player-retry-btn'),
+    // player shell + custom controls
+    playerShell: $('player-shell'),
+    playerControls: $('player-controls'),
+    playerLogo: $('player-logo'),
+    pcPlay: $('pc-play'),
+    pcIconPlay: $('pc-icon-play'),
+    pcIconPause: $('pc-icon-pause'),
+    pcMute: $('pc-mute'),
+    pcIconVol: $('pc-icon-vol'),
+    pcIconMuted: $('pc-icon-muted'),
+    pcVolume: $('pc-volume'),
+    pcFullscreen: $('pc-fullscreen'),
+    pcIconFs: $('pc-icon-fs'),
+    pcIconFsExit: $('pc-icon-fs-exit'),
     // onboarding
     onboardStepType: $('onboard-step-type'),
     onboardForm: $('onboard-form'),
@@ -362,6 +380,7 @@ import {
     categories = [];
     recent = [];
     favorites = new Set();
+    catFavorites = new Set();
     lastEpg = null;
     xmltvParsed = null;
     xmltvFetchedAt = 0;
@@ -787,6 +806,7 @@ import {
     adapter = opts.adapter || built.adapter;
 
     favorites = getFavorites(id);
+    catFavorites = getCategoryFavorites(id);
     recent = getRecent(id);
     loadingChannels = true;
     catalogError = null;
@@ -1230,28 +1250,106 @@ import {
   }
 
   // -------------------------------------------------------------- channels --
+  // Leading glyphs for the vertical category navigation (static SVG, CSP-safe)
+  const CAT_ICON = {
+    all: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="13" y="4" width="7" height="7" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="4" y="13" width="7" height="7" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="13" y="13" width="7" height="7" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>',
+    recent: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    cat: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="12.5" rx="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m9.5 20.5 5-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
+  };
+
   function renderCategories() {
-    // Rebuilding 900+ chips on every channel switch is wasteful — render
-    // only when the category set, the recent-chip visibility or the active
-    // chip actually changed.
-    const sig = `${categories.length}|${recent.length > 0}|${activeCategory}`;
+    // Rebuilding 900+ rows on every channel switch is wasteful — render
+    // only when the category set, favorites, recent-entry visibility or the
+    // active entry actually changed.
+    const sig = `${categories.length}|${recent.length > 0}|${activeCategory}|${[...catFavorites].join(',')}`;
     if (sig === categoriesSignature) return;
     categoriesSignature = sig;
-    const chips = [{ id: 'all', name: 'Alle' }];
-    if (recent.length) chips.push({ id: '__recent', name: 'Zuletzt' });
-    for (const c of categories) chips.push(c);
+
     els.categoryChips.innerHTML = '';
-    for (const c of chips) {
-      const b = document.createElement('button');
-      b.className = 'chip' + (c.id === activeCategory ? ' active' : '');
-      b.textContent = c.name;
-      b.addEventListener('click', () => {
-        activeCategory = c.id;
-        renderCategories();
-        renderChannels();
-      });
-      els.categoryChips.appendChild(b);
+    if (els.catSectionLabel) els.catSectionLabel.classList.remove('hidden');
+
+    // Pinned favorites first (provider order = stable), then everything else.
+    const favCats = categories.filter((c) => c && catFavorites.has(c.id));
+    const restCats = categories.filter((c) => c && !catFavorites.has(c.id));
+
+    if (favCats.length) {
+      // Hide the outer section header — FAVORITEN/ALLE KATEGORIEN replace it.
+      if (els.catSectionLabel) els.catSectionLabel.classList.add('hidden');
+      els.categoryChips.appendChild(buildCatSubLabel('Favoriten'));
+      for (const c of favCats) appendCatRow(c);
+      els.categoryChips.appendChild(buildCatSubLabel('Alle Kategorien'));
     }
+
+    appendCatRow({ id: 'all', name: 'Alle', icon: 'all', fixed: true });
+    if (recent.length) appendCatRow({ id: '__recent', name: 'Zuletzt', icon: 'recent', fixed: true });
+    for (const c of restCats) appendCatRow(c);
+  }
+
+  function buildCatSubLabel(text) {
+    const l = document.createElement('div');
+    l.className = 'cat-sub-label';
+    l.textContent = text;
+    return l;
+  }
+
+  function appendCatRow(c) {
+    const row = document.createElement('div');
+    row.className = 'cat-item' + (c.id === activeCategory ? ' active' : '');
+    row.setAttribute('role', 'button');
+    row.setAttribute('tabindex', '0');
+    row.dataset.id = c.id;
+
+    const glyph = document.createElement('span');
+    glyph.className = 'cat-glyph';
+    glyph.innerHTML = CAT_ICON[c.icon] || CAT_ICON.cat;
+    row.appendChild(glyph);
+
+    const label = document.createElement('span');
+    label.className = 'cat-name';
+    label.textContent = c.name;
+    row.appendChild(label);
+
+    // Pin/unpin action (real provider categories only). Nested inside a
+    // div-row so it is a proper button — and stopPropagation keeps the
+    // star click from ALSO selecting the category.
+    if (!c.fixed) {
+      const starred = catFavorites.has(c.id);
+      const star = document.createElement('button');
+      star.type = 'button';
+      star.className = 'cat-star' + (starred ? ' on' : '');
+      star.setAttribute(
+        'aria-label',
+        starred ? 'Kategorie aus Favoriten entfernen' : 'Kategorie zu Favoriten hinzufügen',
+      );
+      star.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${STAR_PATH}</svg>`;
+      star.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleCategoryFavorite(c.id);
+      });
+      row.appendChild(star);
+    }
+
+    const activate = () => {
+      activeCategory = c.id;
+      renderCategories();
+      renderChannels();
+    };
+    row.addEventListener('click', activate);
+    row.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        activate();
+      }
+    });
+    els.categoryChips.appendChild(row);
+  }
+
+  function toggleCategoryFavorite(id) {
+    if (!activeProfileId) return;
+    if (catFavorites.has(id)) catFavorites.delete(id);
+    else catFavorites.add(id);
+    saveCategoryFavorites(activeProfileId, catFavorites);
+    renderCategories();
   }
 
   /** Filter pipeline for the channel list. Pure — no DOM. */
@@ -1495,6 +1593,7 @@ import {
       .filter(Boolean).join('  ·  ');
     els.offline.classList.add('hidden');
     els.liveBadge.classList.remove('hidden');
+    setPlayerLogo(channel);
 
     const url = getStreamUrlFor(channel);
     if (!url) {
@@ -1502,6 +1601,7 @@ import {
       return;
     }
     attachPlayer(channel, url);
+    refreshControlsPresence();
     maybeRefreshEpg();
     updateMediaSession();
     if (!opts.silent) setPane('live');
@@ -1547,6 +1647,8 @@ import {
     els.channelTitle.textContent = '— Aus —';
     els.channelMeta.textContent = '';
     els.epgPanel.classList.add('hidden');
+    setPlayerLogo(null);
+    refreshControlsPresence();
     renderGuide();
     clearMediaSession();
   }
@@ -1559,6 +1661,8 @@ import {
     if (!opts.isRecovery) recoveryAttempts = 0;
     currentChannel = channel;
     const video = els.video;
+    setPlayerLogo(channel);
+    refreshControlsPresence();
 
     const isTs = /\.ts($|\?)/i.test(url);
     const nativeHls = Boolean(
@@ -1705,21 +1809,206 @@ import {
   }
   setupVideoListeners();
 
+  // ------------------------------------------------- custom player controls --
+  // Premium in-player control bar (play/pause, volume, fullscreen) instead
+  // of the native browser controls. Icons are driven by video events — the
+  // buttons never track their own state. Auto-hides while playing.
+  let controlsTimer = null;
+
+  function controlsForcedVisible() {
+    // Always visible when there is nothing to hide them for.
+    return (
+      !currentChannel ||
+      autoplayBlocked ||
+      (els.playerError && !els.playerError.classList.contains('hidden')) ||
+      els.video.paused ||
+      els.video.ended
+    );
+  }
+
+  function wakeControls() {
+    if (!els.playerShell) return;
+    els.playerShell.classList.remove('controls-idle');
+    clearTimeout(controlsTimer);
+    if (controlsForcedVisible()) return;
+    controlsTimer = setTimeout(() => {
+      if (!controlsForcedVisible()) els.playerShell.classList.add('controls-idle');
+    }, 2800);
+  }
+
+  function refreshControlsPresence() {
+    if (!els.playerControls) return;
+    els.playerControls.classList.toggle('hidden', !currentChannel);
+    if (currentChannel) wakeControls();
+    else {
+      clearTimeout(controlsTimer);
+      els.playerShell.classList.remove('controls-idle');
+    }
+  }
+
+  function updatePlayIcon() {
+    const playing = els.video && !els.video.paused && !els.video.ended;
+    els.pcIconPlay.classList.toggle('hidden', playing);
+    els.pcIconPause.classList.toggle('hidden', !playing);
+    els.pcPlay.setAttribute('aria-label', playing ? 'Pausieren' : 'Wiedergabe');
+  }
+
+  function updateVolumeUi() {
+    const muted = els.video.muted || els.video.volume === 0;
+    els.pcIconVol.classList.toggle('hidden', muted);
+    els.pcIconMuted.classList.toggle('hidden', !muted);
+    els.pcMute.setAttribute('aria-label', muted ? 'Ton aktivieren' : 'Stumm');
+    const v = muted ? 0 : els.video.volume;
+    els.pcVolume.value = String(v);
+    els.pcVolume.style.setProperty('--fill', `${Math.round(v * 100)}%`);
+  }
+
+  function isFullscreenActive() {
+    return Boolean(
+      (document.fullscreenElement && document.fullscreenElement === els.playerShell) ||
+      (document.webkitFullscreenElement && document.webkitFullscreenElement === els.playerShell),
+    );
+  }
+
+  function updateFullscreenIcon() {
+    const fs = isFullscreenActive();
+    els.pcIconFs.classList.toggle('hidden', fs);
+    els.pcIconFsExit.classList.toggle('hidden', !fs);
+    els.pcFullscreen.setAttribute('aria-label', fs ? 'Vollbild beenden' : 'Vollbild');
+  }
+
+  function toggleFullscreen() {
+    if (!els.playerShell) return;
+    if (isFullscreenActive()) {
+      if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
+      else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+      return;
+    }
+    if (els.playerShell.requestFullscreen) {
+      els.playerShell.requestFullscreen().catch(() => {
+        if (els.video.webkitEnterFullscreen) els.video.webkitEnterFullscreen();
+      });
+    } else if (els.playerShell.webkitRequestFullscreen) {
+      els.playerShell.webkitRequestFullscreen();
+    } else if (els.video.webkitEnterFullscreen) {
+      // iPhone Safari: element fullscreen is not supported — hand off to
+      // the native iOS video fullscreen (with Apple's own controls).
+      els.video.webkitEnterFullscreen();
+    }
+  }
+
+  function setupPlayerControls() {
+    if (!els.playerControls || !els.video) return;
+
+    // iOS exposes no scriptable volume — hide the volume UI there.
+    try {
+      const probe = document.createElement('video');
+      probe.volume = 0.5;
+      if (Math.abs(probe.volume - 0.5) > 0.01) {
+        els.playerControls.classList.add('volume-unsupported');
+      }
+    } catch {
+      els.playerControls.classList.add('volume-unsupported');
+    }
+
+    els.pcPlay.addEventListener('click', () => {
+      if (!currentChannel) return;
+      markUserInteracted();
+      if (els.video.paused) attemptPlay();
+      else els.video.pause();
+    });
+
+    els.pcMute.addEventListener('click', () => {
+      els.video.muted = !els.video.muted;
+      if (!els.video.muted && els.video.volume === 0) els.video.volume = 0.5;
+      updateVolumeUi();
+    });
+
+    els.pcVolume.addEventListener('input', () => {
+      const v = parseFloat(els.pcVolume.value);
+      if (Number.isFinite(v)) els.video.volume = v;
+      if (els.video.muted && v > 0) els.video.muted = false;
+      updateVolumeUi();
+    });
+
+    els.pcFullscreen.addEventListener('click', () => {
+      markUserInteracted();
+      toggleFullscreen();
+    });
+
+    // Tap/click on the video toggles playback (overlays sit above the
+    // video, so blocked-autoplay and error states never reach this).
+    els.video.addEventListener('click', () => {
+      if (!currentChannel || autoplayBlocked) return;
+      markUserInteracted();
+      if (els.video.paused) attemptPlay();
+      else els.video.pause();
+    });
+
+    // Auto-hide: any pointer activity over the shell wakes the controls.
+    els.playerShell.addEventListener('pointermove', wakeControls);
+    els.playerShell.addEventListener('pointerdown', wakeControls);
+
+    // Single source of truth: video events drive every icon.
+    els.video.addEventListener('play', updatePlayIcon);
+    els.video.addEventListener('pause', updatePlayIcon);
+    els.video.addEventListener('ended', updatePlayIcon);
+    els.video.addEventListener('volumechange', updateVolumeUi);
+    document.addEventListener('fullscreenchange', () => {
+      updateFullscreenIcon();
+      wakeControls();
+    });
+    document.addEventListener('webkitfullscreenchange', () => {
+      updateFullscreenIcon();
+      wakeControls();
+    });
+
+    updatePlayIcon();
+    updateVolumeUi();
+    updateFullscreenIcon();
+  }
+  setupPlayerControls();
+
+  /** Channel logo inside the player info bar (image or initial letter). */
+  function setPlayerLogo(channel) {
+    if (!els.playerLogo) return;
+    els.playerLogo.innerHTML = '';
+    if (!channel) return;
+    if (channel.logo) {
+      const img = document.createElement('img');
+      img.src = channel.logo;
+      img.alt = '';
+      img.loading = 'lazy';
+      img.referrerPolicy = 'no-referrer';
+      img.addEventListener('error', () => {
+        els.playerLogo.innerHTML = '';
+        els.playerLogo.textContent = (channel.name || '?').charAt(0).toUpperCase();
+      });
+      els.playerLogo.appendChild(img);
+    } else {
+      els.playerLogo.textContent = (channel.name || '?').charAt(0).toUpperCase();
+    }
+  }
+
   // ----------------------------------------------------------- overlays ----
   function showPlayOverlay() {
     if (els.playOverlay) els.playOverlay.classList.remove('hidden');
+    wakeControls();
   }
   function hidePlayOverlay() {
     if (els.playOverlay) els.playOverlay.classList.add('hidden');
+    wakeControls();
   }
   function showPlayerError(kind) {
     if (!els.playerError) return;
     playerErrorKind = kind;
     els.playerErrorMsg.textContent = friendlyPlayerError(kind);
     els.playerError.classList.remove('hidden');
+    wakeControls();
   }
   function hidePlayerError() {
     if (els.playerError) els.playerError.classList.add('hidden');
+    wakeControls();
   }
 
   function friendlyPlayerError(kind) {

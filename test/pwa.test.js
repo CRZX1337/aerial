@@ -101,6 +101,21 @@ test('index.html has complete iOS/PWA metadata and the player app shell', () => 
   assert.match(html, /id="player-error"/);
   assert.match(html, /id="player-retry-btn"/);
 
+  // Unified premium player: one card, custom controls, no native controls
+  assert.match(html, /class="player-card glass"/);
+  assert.match(html, /id="player-shell"/);
+  assert.match(html, /id="player-controls"/);
+  assert.match(html, /id="pc-play"/);
+  assert.match(html, /id="pc-mute"/);
+  assert.match(html, /id="pc-volume"/);
+  assert.match(html, /id="pc-fullscreen"/);
+  assert.match(html, /id="player-logo"/);
+  assert.doesNotMatch(html, /<video[^>]*\scontrols\b/); // custom UI, not the browser's
+  // Info bar integrates channel identity + EPG + actions in one card
+  assert.match(html, /class="player-info"/);
+  assert.match(html, /class="player-info-main"/);
+  assert.match(html, /class="player-actions"/);
+
   // Player-model app shell: onboarding, unlock, profiles
   assert.match(html, /id="onboard-view"/);
   assert.match(html, /data-type="xtream"/);
@@ -111,6 +126,12 @@ test('index.html has complete iOS/PWA metadata and the player app shell', () => 
   assert.match(html, /id="profile-modal-backdrop"/);
   assert.match(html, /id="profile-form"/);
 
+  // Browse pane: vertical category navigation in its own section
+  assert.match(html, /class="cat-section"/);
+  assert.match(html, /class="section-label" id="cat-section-label">Kategorien/);
+  assert.match(html, /id="category-chips" class="category-list"/);
+  assert.match(html, /class="section-label sender-label">Sender/);
+
   // Exactly one video element (single stream, no parallel players)
   assert.equal((html.match(/<video/g) || []).length, 1);
   // No inline styles or scripts (CSP keeps style-src/script-src 'self')
@@ -118,7 +139,7 @@ test('index.html has complete iOS/PWA metadata and the player app shell', () => 
   assert.doesNotMatch(html, /<script(?![^>]*src=)[^>]*>/);
 
   // App entry is an ES module (cache-busted)
-  assert.match(html, /<script type="module" src="\/app\.js\?v=15">/);
+  assert.match(html, /<script type="module" src="\/app\.js\?v=20">/);
   // Branding: Aerial
   assert.match(html, /<title>Aerial<\/title>/);
 });
@@ -149,12 +170,45 @@ test('app.js implements autoplay + recovery + lifecycle without silent errors', 
   // iOS standalone PWAs (would break e.g. profile deletion in the app)
   assert.doesNotMatch(js, /window\.(confirm|alert|prompt)/);
 
+  // Module graph integrity: every named import from profiles.js must exist
+  // as an export in profiles.js. A mismatch makes the ENTIRE app.js module
+  // fail to load (black screen) — happened when profiles.js gained new
+  // exports but browsers served a stale cached copy under the old ?v param.
+  const profilesSrc = fs.readFileSync(path.join(PUBLIC, 'js', 'profiles.js'), 'utf8');
+  const profilesImport = js.match(/import \{([^}]*)\} from '\.\/js\/profiles\.js\?v=\d+'/)[1];
+  for (const name of profilesImport.split(',').map((s) => s.trim()).filter(Boolean)) {
+    assert.match(
+      profilesSrc,
+      new RegExp(`export function ${name}\\(`),
+      `profiles.js must export ${name} (app.js imports it)`,
+    );
+  }
+
   // Video error/stall listeners
   assert.match(js, /video\.addEventListener\('error'/);
   assert.match(js, /video\.addEventListener\('stalled'/);
   assert.match(js, /video\.addEventListener\('waiting'/);
   assert.match(js, /video\.addEventListener\('playing'/);
   assert.match(js, /video\.addEventListener\('canplay'/);
+
+  // Custom player controls: event-driven icons, auto-hide, iOS fallbacks
+  assert.match(js, /function setupPlayerControls\(\)/);
+  assert.match(js, /function wakeControls\(\)/);
+  assert.match(js, /controls-idle/); // auto-hide class
+  assert.match(js, /controlsForcedVisible\(\)/); // stay visible when paused/blocked/error
+  assert.match(js, /els\.pcVolume\.style\.setProperty\('--fill'/); // volume fill
+  assert.match(js, /requestFullscreen/);
+  assert.match(js, /webkitRequestFullscreen/);
+  assert.match(js, /webkitEnterFullscreen/); // iPhone native fallback
+  assert.match(js, /fullscreenchange/);
+  assert.match(js, /volume-unsupported/); // iOS hides scriptable-volume UI
+  assert.match(js, /function setPlayerLogo\(channel\)/); // channel logo in player
+  assert.match(js, /refreshControlsPresence\(\)/); // controls only with a channel
+  // Icons reflect video state (single source of truth), not button clicks
+  assert.match(js, /video\.addEventListener\('play', updatePlayIcon\)/);
+  assert.match(js, /video\.addEventListener\('volumechange', updateVolumeUi\)/);
+  // Tap on the video toggles playback (guarded against overlay states)
+  assert.match(js, /els\.video\.addEventListener\('click'/);
 
   // Lifecycle sync (background/foreground, bfcache, network)
   assert.match(js, /addEventListener\('visibilitychange'/);
@@ -211,13 +265,33 @@ test('app.js implements autoplay + recovery + lifecycle without silent errors', 
 
   // Category chips are signature-guarded too (900+ categories)
   assert.match(js, /categoriesSignature/);
+  // ... and render as a vertical icon list (never horizontal chips)
+  assert.match(js, /row\.className = 'cat-item'/);
+  assert.match(js, /CAT_ICON/);
+  assert.match(js, /cat-glyph/);
+  assert.match(js, /cat-name/);
+
+  // Category favorites: pinned section, separate store, click isolation
+  assert.match(js, /getCategoryFavorites/);
+  assert.match(js, /saveCategoryFavorites/);
+  assert.match(js, /function toggleCategoryFavorite\(id\)/);
+  assert.match(js, /catFavorites = getCategoryFavorites\(id\)/); // loaded per profile
+  assert.match(js, /\[...catFavorites\]\.join\(','\)/); // favorites invalidate the render signature
+  assert.match(js, /buildCatSubLabel\('Favoriten'\)/); // pinned section header
+  assert.match(js, /buildCatSubLabel\('Alle Kategorien'\)/);
+  assert.match(js, /cat-sub-label/);
+  // The star click must not select the category
+  assert.match(js, /star\.addEventListener\('click', \(e\) => \{\r?\n\s+e\.stopPropagation\(\);/);
+  // Rows are keyboard-accessible divs (a button cannot contain the star button)
+  assert.match(js, /row\.setAttribute\('role', 'button'\)/);
+  assert.match(js, /row\.addEventListener\('keydown'/);
 
   // Onboarding hands the probed adapter to connectProfile (auth/categories
   // stay cached; the catalog loads once inside connectProfile)
   assert.match(js, /adapter, \/\/ reuse the probed adapter/);
 
   // Connection diagnostics: https auto-upgrade + staged failure analysis
-  assert.match(js, /import \{ diagnoseStages, httpsTwin \} from '\.\/js\/providers\/netcheck\.js\?v=15'/);
+  assert.match(js, /import \{ diagnoseStages, httpsTwin \} from '\.\/js\/providers\/netcheck\.js\?v=20'/);
   assert.match(js, /function connectWithDiagnosis\(/);
   assert.match(js, /const twin = httpsTwin\(host\)/);
   assert.match(js, /diagnosisMessage/); // precise cause overrides generic message
@@ -269,7 +343,7 @@ test('app.js implements autoplay + recovery + lifecycle without silent errors', 
   assert.match(js, /if \(window\.__AERIAL_AUTH_MODE === 'open'\) \{\r?\n\s+els\.logoutBtn\.classList\.add\('hidden'\)/);
 
   // Provider relay (opt-in, IPTVnator-style web backend pattern)
-  assert.match(js, /import \{ makeProviderFetch \} from '\.\/js\/providers\/relayfetch\.js\?v=15'/);
+  assert.match(js, /import \{ makeProviderFetch \} from '\.\/js\/providers\/relayfetch\.js\?v=20'/);
   assert.match(js, /useRelay: relaid/); // remember what worked
   assert.match(js, /useRelay: profile\.useRelay \|\| false/);
   assert.match(js, /retryViaRelay\(\)/); // catalog retry through own server
@@ -314,7 +388,13 @@ test('profiles.js keeps secrets opt-in and data namespaced per profile', () => {
   assert.match(src, /aerial_profiles/);
   assert.match(src, /aerial_secret_/);
   assert.match(src, /aerial_favs_/);
+  assert.match(src, /aerial_catfavs_/); // category favorites: separate store
   assert.match(src, /aerial_recent_/);
+  // profile deletion clears every per-profile key
+  const delBlock = src.match(/function deleteProfile\(id\) \{[\s\S]*?\}/)[0];
+  for (const key of ['KEY_SECRET', 'KEY_FAVS', 'KEY_CATFAVS', 'KEY_RECENT']) {
+    assert.ok(delBlock.includes(key), `deleteProfile removes ${key}`);
+  }
   // every storage helper is guarded (no crash without localStorage)
   for (const helper of ['function readJson(', 'function writeJson(', 'function removeKey(']) {
     const idx = src.indexOf(helper);
@@ -343,6 +423,37 @@ test('styles.css covers safe areas, dark scheme and app-like touch behaviour', (
   // Overlay styles for the two player states
   assert.match(css, /\.player-overlay/);
   assert.match(css, /\.play-overlay-btn/);
+  // Unified premium player: card, custom controls, fullscreen support
+  assert.match(css, /\.player-card/);
+  assert.match(css, /\.player-controls/);
+  assert.match(css, /\.pc-btn/);
+  assert.match(css, /\.player-shell:fullscreen/);
+  assert.match(css, /\.player-shell:-webkit-full-screen/);
+  assert.match(css, /\.controls-idle \.player-controls/); // auto-hide
+  assert.match(css, /\.player-logo/);
+  assert.match(css, /\.player-info/);
+  assert.match(css, /volume-unsupported \.pc-volume/); // iOS volume hidden
+  // Category navigation: fully visible VERTICAL list (never horizontal scroll)
+  const catListBlock = css.match(/\.category-list \{[\s\S]*?\}/)[0];
+  assert.match(catListBlock, /flex-direction:\s*column/, 'vertical list');
+  assert.match(catListBlock, /overflow-y:\s*auto/, 'vertical scrolling only');
+  assert.match(catListBlock, /overflow-x:\s*hidden/, 'no horizontal overflow');
+  assert.match(catListBlock, /overscroll-behavior:\s*contain/, 'no scroll chaining');
+  assert.ok(/max-height:\s*clamp\(/.test(catListBlock), 'bounded height');
+  const catItemBlock = css.match(/\.cat-item \{[^}]*border-radius: 11px;[^}]*\}/)[0];
+  assert.match(catItemBlock, /min-height:\s*38px/, 'readable row height');
+  assert.match(catItemBlock, /white-space:\s*nowrap/, 'no text wrapping/cut-off');
+  assert.match(css, /\.cat-item\.active::before/, 'active entry: gradient indicator bar');
+  assert.match(css, /\.section-label/, 'Kategorien/Sender section headers');
+  // Category favorite stars + pinned sub-sections
+  assert.match(css, /\.cat-star/);
+  assert.match(css, /\.cat-star\.on svg path \{ fill: currentColor; \}/, 'pinned = filled star');
+  assert.match(css, /\.cat-sub-label/);
+  assert.doesNotMatch(css, /\.category-chips\b/, 'horizontal chips are gone');
+  const headBlock = css.match(/\.browser-head \{[\s\S]*?\}/)[0];
+  assert.match(headBlock, /flex-shrink:\s*0/, 'search row protected');
+  const catSectionBlock = css.match(/\.cat-section \{[\s\S]*?\}/)[0];
+  assert.match(catSectionBlock, /flex-shrink:\s*0/, 'category section never squeezed');
   // Onboarding / profile / modal styles
   assert.match(css, /\.type-card/);
   assert.match(css, /\.profile-card/);
