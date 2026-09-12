@@ -191,6 +191,29 @@ test('app.js implements autoplay + recovery + lifecycle without silent errors', 
   // Render guards
   assert.match(js, /if \(!els\.channelList\) return/);
   assert.match(js, /if \(!currentChannel\) return/);
+
+  // Windowed channel list: huge catalogs (50k+) never render as one tree
+  assert.match(js, /PAGE_INITIAL\s*=\s*90/);
+  assert.match(js, /PAGE_STEP\s*=\s*150/);
+  assert.match(js, /IntersectionObserver/);
+  assert.match(js, /attachListSentinel/);
+  assert.match(js, /appendChannelRange/);
+  assert.match(js, /renderLimit/);
+  assert.match(js, /listVersion \+= 1/);
+
+  // Filter-signature guard: unchanged state = highlight update only
+  assert.match(js, /renderedSignature/);
+  assert.match(js, /updateActiveChannelHighlight/);
+  assert.match(js, /card\.dataset\.id = c\.id/);
+
+  // Debounced search for giant catalogs
+  assert.match(js, /clearTimeout\(searchDebounce\)/);
+
+  // Category chips are signature-guarded too (900+ categories)
+  assert.match(js, /categoriesSignature/);
+
+  // Onboarding hands the probed adapter to connectProfile (no double fetch)
+  assert.match(js, /adapter: probe\.adapter/);
 });
 
 test('provider modules implement the adapter interface cleanly', () => {

@@ -100,8 +100,14 @@ export class XtreamAdapter {
       for (const c of categories) {
         if (c && c.category_id != null) catName.set(String(c.category_id), c.category_name);
       }
+      // Some panels pad the stream list with "header" rows (e.g.
+      // "##### 4K UHD #####") that are not real channels — drop them.
+      const isHeaderRow = (name) =>
+        typeof name === 'string' &&
+        (/^#{3,}[\s\S]*#{3,}$/.test(name.trim()) || /^#{4,}/.test(name.trim()) || /^#+$/.test(name.trim()));
       const channels = streams
         .filter((s) => s && s.stream_id != null && (s.stream_type === 'live' || s.stream_type == null))
+        .filter((s) => !isHeaderRow(s.name))
         .map((s, i) => ({
           id: String(s.stream_id),
           num: s.num || i + 1,

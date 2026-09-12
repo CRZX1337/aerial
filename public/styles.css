@@ -787,6 +787,13 @@ input, [contenteditable="true"], .guide-item-desc {
   min-height: 80px;
 }
 
+/* Infinite-scroll sentinel for windowed rendering of huge catalogs */
+.list-sentinel {
+  grid-column: 1 / -1;
+  height: 2px;
+  min-height: 2px;
+}
+
 .channel-card {
   position: relative;
   display: flex;

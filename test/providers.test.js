@@ -138,6 +138,9 @@ function makeXtreamMock() {
         { stream_id: 10, num: 1, name: 'Chan A', stream_icon: 'http://x/a.png', category_id: '1', stream_type: 'live' },
         { stream_id: 11, num: 2, name: 'Chan B', category_id: '1', stream_type: 'live' },
         { stream_id: 12, num: 3, name: 'VOD entry', category_id: '1', stream_type: 'movie' }, // filtered out
+        { stream_id: 13, num: 4, name: '##### 4K ᵁᴴᴰ ³⁸⁴⁰ᴾ #####', category_id: '1', stream_type: 'live' }, // header row
+        { stream_id: 14, num: 5, name: '#### Sport Section', category_id: '1', stream_type: 'live' }, // header row
+        { stream_id: 15, num: 6, name: 'Real Channel #1', category_id: '1', stream_type: 'live' }, // keep: # only mid-name
       ]));
     }
     if (action === 'get_short_epg') {
@@ -163,11 +166,16 @@ test('XtreamAdapter: authenticate, catalog mapping, EPG and stream URL over HTTP
 
     const { categories, channels } = await adapter.getChannels();
     assert.deepEqual(categories, [{ id: '1', name: 'News' }]);
-    assert.equal(channels.length, 2); // movie entry filtered
+    // movie entry + the two "#####" header rows are filtered;
+    // "Real Channel #1" survives (hashes only mid-name)
+    assert.equal(channels.length, 3);
     assert.equal(channels[0].id, '10');
     assert.equal(channels[0].name, 'Chan A');
     assert.equal(channels[0].logo, 'http://x/a.png');
     assert.equal(channels[0].categoryName, 'News');
+    assert.ok(!channels.some((c) => c.name.includes('ᵁᴴᴰ')), 'header row dropped');
+    assert.ok(!channels.some((c) => c.name === '#### Sport Section'), 'header prefix row dropped');
+    assert.ok(channels.some((c) => c.name === 'Real Channel #1'), 'legit # in name kept');
 
     const url = adapter.getStreamUrl('10');
     assert.equal(url, `${host}/live/user/pass/10.m3u8`);

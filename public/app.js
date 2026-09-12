@@ -1,6 +1,6 @@
-import { XtreamAdapter } from './js/providers/xtream.js?v=7';
-import { M3UAdapter } from './js/providers/m3u.js?v=7';
-import { fetchXmltv, parseXMLTV, shortEpg } from './js/providers/xmltv.js?v=7';
+import { XtreamAdapter } from './js/providers/xtream.js?v=8';
+import { M3UAdapter } from './js/providers/m3u.js?v=8';
+import { fetchXmltv, parseXMLTV, shortEpg } from './js/providers/xmltv.js?v=8';
 import {
   loadProfiles,
   upsertProfile,
@@ -15,7 +15,7 @@ import {
   saveFavorites,
   getRecent,
   pushRecent,
-} from './js/profiles.js?v=7';
+} from './js/profiles.js?v=8';
 
 (function () {
   'use strict';
@@ -56,6 +56,17 @@ import {
   let epgReq = 0;
   let xmltvParsed = null; // parsed XMLTV for M3U profiles
   let xmltvFetchedAt = 0;
+
+  // --- windowed channel list (huge catalogs: 50k+ channels) ---
+  let listVersion = 0; // bumped whenever the catalog data changes
+  let renderLimit = 0; // how many filtered channels are currently rendered
+  let renderedSignature = null; // last rendered filter signature
+  let listObserver = null; // IntersectionObserver for infinite scroll
+  let searchDebounce = null;
+  let categoriesSignature = null;
+
+  const PAGE_INITIAL = 90;
+  const PAGE_STEP = 150;
 
   const MAX_RECOVERY_ATTEMPTS = 5;
   const XMLTV_REFRESH_MS = 10 * 60 * 1000;
@@ -443,7 +454,10 @@ import {
       if (onboardType === 'xtream' && remember) setRememberedSecret(profile.id, password);
 
       showMainShell();
-      await connectProfile(profile.id, { secret: onboardType === 'xtream' ? password : null });
+      await connectProfile(profile.id, {
+        secret: onboardType === 'xtream' ? password : null,
+        adapter: probe.adapter, // reuse the probed catalog — no double fetch
+      });
       toast(`${profile.name} verbunden · ${loaded.length} Sender`);
     } catch (err) {
       if (err && !err.providerUrl) err.providerUrl = host;
@@ -550,7 +564,10 @@ import {
       password: memorySecret,
       epgUrl: profile.epgUrl,
     });
-    adapter = built.adapter;
+    // Onboarding / profile creation already probed a fully authenticated
+    // adapter with a cached catalog — reuse it instead of re-fetching
+    // (huge catalogs are 15+ MB; a second fetch doubles the wait).
+    adapter = opts.adapter || built.adapter;
 
     favorites = getFavorites(id);
     recent = getRecent(id);
@@ -567,6 +584,7 @@ import {
       if (token !== connectToken) return; // stale — a newer connect won
       channels = list;
       categories = cats;
+      listVersion += 1; // catalog changed — force a fresh windowed render
       catalogError = null;
       els.connDot.className = 'conn-dot on';
     } catch (err) {
@@ -772,6 +790,7 @@ import {
     els.pmError.textContent = '';
     try {
       let saved;
+      let probeRef = null;
       if (pmEditingId) {
         const existing = getProfile(pmEditingId);
         if (!existing) throw new Error('Profil nicht gefunden.');
@@ -790,6 +809,7 @@ import {
         if (type === 'xtream') await probe.adapter.authenticate();
         const { channels: loaded } = await probe.adapter.getChannels();
         if (!loaded.length) throw new Error('Der Anbieter hat keine Sender geliefert.');
+        probeRef = probe.adapter;
         saved = upsertProfile({
           id: newProfileId(),
           type,
@@ -806,7 +826,11 @@ import {
       profiles = loadProfiles();
       renderProfileList();
       if (!pmEditingId || saved.id === activeProfileId) {
-        await connectProfile(saved.id, { secret: type === 'xtream' ? password : undefined });
+        await connectProfile(saved.id, {
+          secret: type === 'xtream' ? password : undefined,
+          // For brand-new profiles reuse the probed catalog — no double fetch.
+          adapter: pmEditingId ? undefined : probeRef,
+        });
         toast(`${saved.name} verbunden`);
       } else {
         toast(`${saved.name} gespeichert`);
@@ -825,8 +849,22 @@ import {
     if (favorites.has(id)) favorites.delete(id);
     else favorites.add(id);
     saveFavorites(activeProfileId, favorites);
-    renderChannels();
+    if (favOnly) {
+      renderChannels({ force: true }); // list membership changed — re-filter
+    } else {
+      updateFavStar(id); // in-place star update: no rebuild, no scroll jump
+    }
     updateFavToggle();
+  }
+
+  function updateFavStar(id) {
+    const card = els.channelList.querySelector(`.channel-card[data-id="${CSS.escape(id)}"]`);
+    if (!card) return;
+    const fav = card.querySelector('.channel-fav');
+    if (!fav) return;
+    const on = favorites.has(id);
+    fav.classList.toggle('on', on);
+    fav.setAttribute('aria-label', on ? 'Aus Favoriten entfernen' : 'Zu Favoriten hinzufügen');
   }
 
   function updateFavToggle() {
@@ -835,6 +873,12 @@ import {
 
   // -------------------------------------------------------------- channels --
   function renderCategories() {
+    // Rebuilding 900+ chips on every channel switch is wasteful — render
+    // only when the category set, the recent-chip visibility or the active
+    // chip actually changed.
+    const sig = `${categories.length}|${recent.length > 0}|${activeCategory}`;
+    if (sig === categoriesSignature) return;
+    categoriesSignature = sig;
     const chips = [{ id: 'all', name: 'Alle' }];
     if (recent.length) chips.push({ id: '__recent', name: 'Zuletzt' });
     for (const c of categories) chips.push(c);
@@ -852,7 +896,31 @@ import {
     }
   }
 
-  function renderChannels() {
+  /** Filter pipeline for the channel list. Pure — no DOM. */
+  function computeFiltered() {
+    const recentIds = activeCategory === '__recent' ? new Set(recent.map((r) => r.id)) : null;
+    const q = search.trim().toLowerCase();
+    const filtered = channels.filter((c) => {
+      if (!c) return false;
+      if (activeCategory === '__recent') {
+        if (!recentIds.has(c.id)) return false;
+      } else if (activeCategory !== 'all' && c.categoryId !== activeCategory) return false;
+      if (favOnly && !favorites.has(c.id)) return false;
+      if (q && !(c.name || '').toLowerCase().includes(q)) return false;
+      return true;
+    });
+    if (activeCategory === '__recent') {
+      filtered.sort((a, b) => {
+        const ia = recent.findIndex((r) => r.id === a.id);
+        const ib = recent.findIndex((r) => r.id === b.id);
+        return ia - ib;
+      });
+    }
+    const signature = [listVersion, activeCategory, favOnly, q, recent.length, recent[0] ? recent[0].id : ''].join('|');
+    return { filtered, signature };
+  }
+
+  function renderChannels(opts = {}) {
     if (!els.channelList) return;
     if (loadingChannels && !channels.length) {
       renderSkeletons();
@@ -860,6 +928,7 @@ import {
     }
 
     if (catalogError && !channels.length) {
+      destroyListObserver();
       els.channelList.innerHTML = '';
       const card = document.createElement('div');
       card.className = 'error-card';
@@ -882,26 +951,22 @@ import {
       return;
     }
 
-    const recentIds = new Set(recent.map((r) => r.id));
-    const q = search.trim().toLowerCase();
-    const filtered = channels.filter((c) => {
-      if (!c) return false;
-      if (activeCategory === '__recent') {
-        if (!recentIds.has(c.id)) return false;
-      } else if (activeCategory !== 'all' && c.categoryId !== activeCategory) return false;
-      if (favOnly && !favorites.has(c.id)) return false;
-      if (q && !(c.name || '').toLowerCase().includes(q)) return false;
-      return true;
-    });
-    if (activeCategory === '__recent') {
-      filtered.sort((a, b) => {
-        const ia = recent.findIndex((r) => r.id === a.id);
-        const ib = recent.findIndex((r) => r.id === b.id);
-        return ia - ib;
-      });
-    }
+    const { filtered, signature } = computeFiltered();
 
+    // Same filter state as before: just refresh the active highlight —
+    // no DOM rebuild (keeps scroll position and avoids re-render costs).
+    if (!opts.force && signature === renderedSignature) {
+      updateActiveChannelHighlight();
+      return;
+    }
+    renderedSignature = signature;
+
+    // Windowed rendering: huge catalogs (50k+ channels) must never be
+    // rendered as one DOM tree — render the first page and append more
+    // via IntersectionObserver as the user scrolls.
+    destroyListObserver();
     els.channelList.innerHTML = '';
+    renderLimit = Math.min(PAGE_INITIAL, filtered.length);
     if (!filtered.length) {
       const div = document.createElement('div');
       div.className = 'empty-list';
@@ -912,19 +977,69 @@ import {
       return;
     }
 
+    appendChannelRange(filtered, 0, renderLimit, true);
+    if (renderLimit < filtered.length) attachListSentinel(filtered);
+    lastRenderedActiveId = '__none__';
+    updateActiveChannelHighlight();
+  }
+
+  function appendChannelRange(filtered, from, to, animate) {
     const activeId = currentChannel ? currentChannel.id : null;
-    filtered.forEach((c, i) => {
-      els.channelList.appendChild(buildChannelCard(c, activeId, i));
-    });
+    const frag = document.createDocumentFragment();
+    for (let i = from; i < to && i < filtered.length; i++) {
+      frag.appendChild(buildChannelCard(filtered[i], activeId, animate ? i : -1));
+    }
+    els.channelList.appendChild(frag);
+  }
+
+  function attachListSentinel(filtered) {
+    const sentinel = document.createElement('div');
+    sentinel.className = 'list-sentinel';
+    sentinel.setAttribute('aria-hidden', 'true');
+    els.channelList.appendChild(sentinel);
+    listObserver = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        const from = renderLimit;
+        const to = Math.min(filtered.length, from + PAGE_STEP);
+        if (to <= from) {
+          destroyListObserver();
+          return;
+        }
+        renderLimit = to;
+        appendChannelRange(filtered, from, to, false);
+        if (renderLimit >= filtered.length) destroyListObserver();
+      },
+      { root: null, rootMargin: '700px' },
+    );
+    listObserver.observe(sentinel);
+  }
+
+  function destroyListObserver() {
+    if (listObserver) {
+      listObserver.disconnect();
+      listObserver = null;
+    }
+  }
+
+  /** Toggle the active card in place — no list rebuild, no scroll jump. */
+  function updateActiveChannelHighlight() {
+    const activeId = currentChannel ? currentChannel.id : null;
+    if (activeId === lastRenderedActiveId) return;
+    for (const card of els.channelList.querySelectorAll('.channel-card')) {
+      card.classList.toggle('active', card.dataset.id === activeId);
+    }
     lastRenderedActiveId = activeId;
   }
 
   function buildChannelCard(c, activeId, i) {
     const card = document.createElement('div');
     card.className = 'channel-card' + (c.id === activeId ? ' active' : '');
+    card.dataset.id = c.id;
     card.setAttribute('role', 'button');
     card.setAttribute('tabindex', '0');
-    card.style.animationDelay = `${Math.min(240, i * 16)}ms`;
+    // Stagger only the first rendered page; appended pages appear instantly.
+    card.style.animationDelay = i >= 0 && i < 15 ? `${i * 16}ms` : '0ms';
 
     const logo = document.createElement('div');
     logo.className = 'channel-logo';
@@ -1477,7 +1592,9 @@ import {
   els.searchInput.addEventListener('input', () => {
     search = els.searchInput.value;
     els.searchClear.classList.toggle('hidden', !search);
-    renderChannels();
+    // Filtering 50k+ channels per keystroke is wasteful — debounce.
+    clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => renderChannels(), 200);
   });
 
   els.searchClear.addEventListener('click', () => {
