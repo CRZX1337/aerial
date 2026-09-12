@@ -38,9 +38,16 @@ export class XtreamAdapter {
   }
 
   async fetchJson(url) {
+    // Bounded request: hung TCP connections must surface as an error
+    // instead of spinning forever (AbortSignal.timeout: Safari 16+,
+    // Chrome 103+, Firefox 100+ — older browsers simply skip the limit).
+    const signal =
+      typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+        ? AbortSignal.timeout(12_000)
+        : undefined;
     let res;
     try {
-      res = await this.fetchImpl(url, { headers: { accept: 'application/json' } });
+      res = await this.fetchImpl(url, { headers: { accept: 'application/json' }, signal });
     } catch (err) {
       const e = new Error('Provider unreachable (network or CORS)');
       e.code = 'network_or_cors';

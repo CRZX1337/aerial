@@ -1,6 +1,7 @@
-import { XtreamAdapter } from './js/providers/xtream.js?v=8';
-import { M3UAdapter } from './js/providers/m3u.js?v=8';
-import { fetchXmltv, parseXMLTV, shortEpg } from './js/providers/xmltv.js?v=8';
+import { XtreamAdapter } from './js/providers/xtream.js?v=9';
+import { M3UAdapter } from './js/providers/m3u.js?v=9';
+import { fetchXmltv, parseXMLTV, shortEpg } from './js/providers/xmltv.js?v=9';
+import { diagnoseFailure, httpsTwin } from './js/providers/netcheck.js?v=9';
 import {
   loadProfiles,
   upsertProfile,
@@ -15,7 +16,7 @@ import {
   saveFavorites,
   getRecent,
   pushRecent,
-} from './js/profiles.js?v=8';
+} from './js/profiles.js?v=9';
 
 (function () {
   'use strict';
@@ -405,6 +406,8 @@ import {
 
   function classifyProviderError(err) {
     const e = err || {};
+    // Diagnosed failures carry a precise, actionable message already.
+    if (e.diagnosisMessage) return e.diagnosisMessage;
     if (e.code === 'network_or_cors' || err instanceof TypeError) {
       return `Anbieter nicht erreichbar (Netzwerk oder CORS).${mixedContentHint(e.providerUrl)}`;
     }
@@ -413,6 +416,69 @@ import {
     if (e.code === 'invalid_response') return 'Der Anbieter hat eine ungültige Antwort gesendet.';
     if (e.code === 'http_error') return `Der Anbieter antwortet mit HTTP ${e.status}.`;
     return e.message || 'Unbekannter Verbindungsfehler.';
+  }
+
+  function isNetworkFailure(err) {
+    return Boolean(err && (err.code === 'network_or_cors' || err instanceof TypeError));
+  }
+
+  /**
+   * Attempt a full provider connection (authenticate + catalog) for one
+   * host. Returns the authenticated adapter, throws the provider error.
+   */
+  async function attemptConnect({ type, host, username, password, epgUrl }) {
+    const { adapter } = createAdapter({ type, host, username, password, epgUrl });
+    if (type === 'xtream') await adapter.authenticate();
+    const { channels } = await adapter.getChannels();
+    if (!channels.length) {
+      const err = new Error('Der Anbieter hat keine Sender geliefert.');
+      err.code = 'empty_catalog';
+      throw err;
+    }
+    return adapter;
+  }
+
+  /**
+   * Connect with automatic HTTPS upgrade + precise failure diagnosis.
+   *
+   * Browser network failures are opaque (DNS block, adblocker, firewall,
+   * mixed content and genuine CORS refusals all look alike). When the
+   * entered host fails at the network level and is http://, the https://
+   * twin is tried automatically — many providers (esp. Cloudflare-fronted)
+   * serve the same API over both, and https is strictly more compatible
+   * (no mixed content, survives HTTPS deployments).
+   *
+   * Returns { adapter, host, upgraded }. Throws an error enriched with
+   * `diagnosisMessage` when everything failed.
+   */
+  async function connectWithDiagnosis({ type, host, username, password, epgUrl }) {
+    let firstErr = null;
+    try {
+      const adapter = await attemptConnect({ type, host, username, password, epgUrl });
+      return { adapter, host, upgraded: false };
+    } catch (err) {
+      if (!isNetworkFailure(err)) throw err; // real provider answer — not a transport problem
+      firstErr = err;
+    }
+
+    // Transport-level failure on http://: try the https twin before giving up.
+    const twin = httpsTwin(host);
+    if (twin) {
+      try {
+        const adapter = await attemptConnect({ type, host: twin, username, password, epgUrl });
+        return { adapter, host: twin, upgraded: true };
+      } catch (err) {
+        if (!isNetworkFailure(err)) throw err; // https answered — trust that verdict
+      }
+    }
+
+    // Both transports failed: identify the actual cause on THIS device.
+    const diag = await diagnoseFailure(host);
+    const wrap = firstErr || new Error('Verbindung fehlgeschlagen.');
+    wrap.code = wrap.code || 'network_or_cors';
+    wrap.providerUrl = host;
+    wrap.diagnosisMessage = diag.message;
+    throw wrap;
   }
 
   els.onboardForm.addEventListener('submit', async (e) => {
@@ -436,16 +502,16 @@ import {
     els.obSubmit.disabled = true;
     els.onboardError.textContent = '';
     try {
-      const probe = createAdapter({ type: onboardType, host, username, password, epgUrl });
-      if (probe.type === 'xtream') await probe.adapter.authenticate();
-      const { channels: loaded } = await probe.adapter.getChannels();
-      if (!loaded.length) throw new Error('Der Anbieter hat keine Sender geliefert.');
+      const { adapter, host: connectedHost, upgraded } = await connectWithDiagnosis({
+        type: onboardType, host, username, password, epgUrl,
+      });
+      const { channels: loaded } = await adapter.getChannels();
 
       const profile = upsertProfile({
         id: newProfileId(),
         type: onboardType,
         name,
-        host,
+        host: connectedHost, // https twin when the http host was unreachable
         username: onboardType === 'xtream' ? username : '',
         epgUrl: onboardType === 'm3u' ? epgUrl || '' : '',
         createdAt: Date.now(),
@@ -456,9 +522,11 @@ import {
       showMainShell();
       await connectProfile(profile.id, {
         secret: onboardType === 'xtream' ? password : null,
-        adapter: probe.adapter, // reuse the probed catalog — no double fetch
+        adapter, // reuse the probed catalog — no double fetch
       });
-      toast(`${profile.name} verbunden · ${loaded.length} Sender`);
+      toast(upgraded
+        ? `Verbunden über HTTPS · ${loaded.length} Sender`
+        : `${profile.name} verbunden · ${loaded.length} Sender`);
     } catch (err) {
       if (err && !err.providerUrl) err.providerUrl = host;
       els.onboardError.textContent = classifyProviderError(err);
@@ -589,7 +657,51 @@ import {
       els.connDot.className = 'conn-dot on';
     } catch (err) {
       if (token !== connectToken) return;
+
+      // Transport-level failure on a stored http:// host: retry the https
+      // twin — if it works, persist the upgrade so it sticks.
+      if (isNetworkFailure(err)) {
+        const twin = httpsTwin(profile.host);
+        if (twin) {
+          try {
+            const upgradedAdapter = createAdapter({
+              type: profile.type,
+              host: twin,
+              username: profile.username,
+              password: memorySecret,
+              epgUrl: profile.epgUrl,
+            }).adapter;
+            const { channels: list, categories: cats } = await upgradedAdapter.getChannels();
+            if (token !== connectToken) return;
+            adapter = upgradedAdapter;
+            channels = list;
+            categories = cats;
+            listVersion += 1;
+            catalogError = null;
+            els.connDot.className = 'conn-dot on';
+            upsertProfile({ ...getProfile(id), host: twin, lastUsedAt: Date.now() });
+            profiles = loadProfiles();
+            toast('HTTP nicht erreichbar — Profil wurde auf HTTPS umgestellt.');
+            renderProfileList();
+            return;
+          } catch (upgradeErr) {
+            if (!isNetworkFailure(upgradeErr)) {
+              // https answered with a real provider error — report that.
+              if (token !== connectToken) return;
+              if (!upgradeErr.providerUrl) upgradeErr.providerUrl = twin;
+              err = upgradeErr;
+            }
+          }
+        }
+      }
+
       if (err && !err.providerUrl) err.providerUrl = profile.host;
+      if (isNetworkFailure(err)) {
+        // Identify the actual cause on this device (mixed content, DNS /
+        // blocker, or genuine CORS) for an actionable message.
+        const diag = await diagnoseFailure(profile.host);
+        err.diagnosisMessage = diag.message;
+      }
       catalogError = classifyProviderError(err);
       els.connDot.className = 'conn-dot off';
       if (err && err.code === 'invalid_credentials') {
@@ -804,23 +916,24 @@ import {
         if (password) setRememberedSecret(saved.id, remember ? password : null);
         else if (!remember) setRememberedSecret(saved.id, null);
       } else {
-        // New profile: validate the connection before saving.
-        const probe = createAdapter({ type, host, username, password, epgUrl });
-        if (type === 'xtream') await probe.adapter.authenticate();
-        const { channels: loaded } = await probe.adapter.getChannels();
-        if (!loaded.length) throw new Error('Der Anbieter hat keine Sender geliefert.');
-        probeRef = probe.adapter;
+        // New profile: validate the connection before saving (with
+        // automatic https upgrade + diagnosis on transport failures).
+        const { adapter, host: connectedHost, upgraded } = await connectWithDiagnosis({
+          type, host, username, password, epgUrl,
+        });
+        probeRef = adapter;
         saved = upsertProfile({
           id: newProfileId(),
           type,
           name,
-          host,
+          host: connectedHost, // https twin when http was unreachable
           username: type === 'xtream' ? username : '',
           epgUrl: type === 'm3u' ? epgUrl : '',
           createdAt: Date.now(),
           lastUsedAt: Date.now(),
         });
         if (remember) setRememberedSecret(saved.id, password);
+        if (upgraded) toast('HTTP nicht erreichbar — HTTPS-Variante wird verwendet.');
       }
       closeProfileModal();
       profiles = loadProfiles();

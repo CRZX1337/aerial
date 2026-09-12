@@ -31,6 +31,10 @@ Initial public release.
   proxies nothing; the browser talks to the user's own provider directly.
 - **Provider support:** Xtream Codes API, M3U/M3U8 playlists, XMLTV EPG
   (incl. transparent gzip decompression).
+- **Connection diagnostics:** automatic `https://` upgrade for unreachable
+  `http://` providers plus precise failure analysis (mixed content,
+  network/DNS/adblocker block, genuine CORS refusal) with actionable
+  messages.
 - **Profile system:** multiple IPTV accounts with onboarding wizard,
   connection test, edit/switch/delete, per-profile favorites and
   recently-watched.
@@ -48,6 +52,6 @@ Initial public release.
   `SameSite=Lax` cookies with configurable `Secure` flag, provider
   credentials never touch the server, opt-in local storage of provider
   secrets.
-- **Test suite:** 39 tests across auth, provider adapters, PWA assets,
-  security, and end-to-end flows (`npm test`).
+- **Test suite:** 50 tests across auth, provider adapters, connection
+  diagnostics, PWA assets, security, and end-to-end flows (`npm test`).
 - Bundled CORS-enabled mock Xtream provider for local testing.

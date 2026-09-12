@@ -86,8 +86,14 @@ export class M3UAdapter {
   }
 
   async fetchText(url) {
+    // Bounded request (AbortSignal.timeout: modern browsers; older skip).
+    const signal =
+      typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+        ? AbortSignal.timeout(12_000)
+        : undefined;
     const res = await this.fetchImpl(url, {
       headers: { accept: 'audio/x-mpegurl, application/vnd.apple.mpegurl, text/plain, */*' },
+      signal,
     });
     if (!res.ok) {
       const err = new Error(`Playlist request failed (HTTP ${res.status})`);

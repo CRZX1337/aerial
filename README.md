@@ -89,6 +89,31 @@ messages** instead of silent failures. There is deliberately **no** CORS
 bypass, `no-cors` hack, or hidden relay — a provider that refuses browser
 connections simply cannot be used from the browser.
 
+### Automatic connection diagnostics
+
+When a connection fails, Aerial does not just say "network error":
+
+1. **HTTPS auto-upgrade:** if the entered provider URL is `http://` and the
+   connection fails at the transport level, the `https://` twin is tried
+   automatically. Many Cloudflare-fronted providers serve the same API over
+   both — and `https` survives HTTPS deployments and stricter networks.
+   The upgraded URL is stored in the profile.
+2. **Precise cause analysis:** if both transports fail, targeted probes
+   distinguish the actual cause on *your* device — mixed content
+   (HTTPS app + HTTP provider), network-level blocks (DNS filter, firewall,
+   adblocker extension, ISP) or a genuine CORS refusal — and show the
+   matching fix.
+
+**Troubleshooting a failed connection:**
+- App served over **https://** and provider URL is **http://** → use the
+  provider's **https** URL (the browser blocks mixed content, no app can
+  change that)
+- Provider works in a native IPTV app but not in Aerial → that app has no
+  CORS rules; check whether the provider sends
+  `Access-Control-Allow-Origin` (many Xtream panels do), disable adblocker
+  extensions for the app, or try a different network
+- Provider serves both `http://` and `https://` → prefer `https://`
+
 ## ⚙️ Configuration (`.env`)
 
 Copy [`.env.example`](.env.example) to `.env`. Everything is optional:
