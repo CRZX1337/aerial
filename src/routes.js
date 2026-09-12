@@ -1,6 +1,8 @@
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import express from 'express';
 import { ROOT_DIR } from './config.js';
+import { relayFetch, RelayError } from './relay.js';
 
 const SESSION_COOKIE = 'aerial_session';
 
@@ -120,6 +122,54 @@ export function buildApp({ auth, config = {}, sessionTtlMs }) {
       authenticated: Boolean(req.session),
       role: req.session ? req.session.role : null,
     });
+  });
+
+  // ---- provider relay (opt-in; same pattern as IPTVnator's web backend) ----
+  // The user's own server fetches a provider URL and streams it back. This
+  // bypasses browser limits that kill 20+ MB catalog downloads (tab
+  // throttling) and bundles provider traffic for max_connections=1 accounts.
+  // URLs (which contain provider credentials) are NEVER logged.
+  app.post('/api/relay', (req, res) => {
+    const authed = config.authOpen || Boolean(req.session);
+    if (!authed) return res.status(401).json({ error: 'unauthorized' });
+    const url = req.body && req.body.url;
+    if (typeof url !== 'string' || !url) {
+      return res.status(400).json({ error: 'bad_request', message: 'url required' });
+    }
+
+    relayFetch(url).then(
+      (upstream) => {
+        res.status(upstream.status);
+        // Forward only media-relevant headers; drop set-cookie & friends.
+        const ct = upstream.headers['content-type'];
+        if (ct) res.setHeader('Content-Type', ct);
+        const cl = upstream.headers['content-length'];
+        if (cl) res.setHeader('Content-Length', cl);
+        res.setHeader('Cache-Control', 'no-store');
+        if (upstream.empty || !upstream.body) {
+          res.end();
+          return;
+        }
+        const body = upstream.body;
+        res.setHeader('X-Aerial-Relay', '1');
+        const close = () => {
+          body.destroy();
+        };
+        res.on('close', close);
+        body.on('error', () => {
+          close();
+          if (!res.headersSent) res.status(502).json({ error: 'relay_network' });
+          else res.end();
+        });
+        body.pipe(res);
+      },
+      (err) => {
+        if (err instanceof RelayError) {
+          return res.status(err.status).json({ error: err.code, message: err.message });
+        }
+        res.status(500).json({ error: 'relay_failed' });
+      },
+    );
   });
 
   // ---- PWA manifest -----------------------------------------------------------

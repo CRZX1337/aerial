@@ -13,7 +13,7 @@
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
-  <link rel="stylesheet" href="/styles.css?v=12" />
+  <link rel="stylesheet" href="/styles.css?v=15" />
 </head>
 <body>
   <!-- Ambient liquid-glass background -->
@@ -345,6 +345,10 @@
             <input id="pm-remember" type="checkbox" />
             <span>Passwort auf diesem Gerät speichern</span>
           </label>
+          <label class="check-field" id="pm-relay-field">
+            <input id="pm-relay" type="checkbox" />
+            <span>Über eigenen Server verbinden (Relay — bei Verbindungsproblemen)</span>
+          </label>
           <div class="onboard-actions">
             <button id="pm-cancel" class="btn btn-ghost" type="button">Abbrechen</button>
             <button id="pm-submit" class="btn btn-primary" type="submit">
@@ -381,6 +385,6 @@
 
   <script src="/vendor/hls.min.js"></script>
   <script src="/auth-mode.js?v=1"></script>
-  <script type="module" src="/app.js?v=12"></script>
+  <script type="module" src="/app.js?v=15"></script>
 </body>
 </html>

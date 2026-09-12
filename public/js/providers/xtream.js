@@ -26,11 +26,13 @@ async function mapPool(total, limit, worker) {
 }
 
 export class XtreamAdapter {
-  constructor({ host, username, password, fetchImpl = fetch, now = () => Date.now() } = {}) {
+  constructor({ host, username, password, fetchImpl, now = () => Date.now() } = {}) {
     this.host = String(host || '').replace(/\/+$/, '');
     this.username = String(username || '');
     this.password = String(password || '');
-    this.fetchImpl = fetchImpl;
+    // fetchImpl may be a direct fetch or the server-relay fetch
+    // (see providers/relayfetch.js) — the adapter code is agnostic.
+    this.fetchImpl = fetchImpl || fetch;
     this.now = now;
     this.channelsCache = { data: null, at: 0, inflight: null };
     this.categoriesCache = { data: null, at: 0, inflight: null };
@@ -95,9 +97,31 @@ export class XtreamAdapter {
     }
   }
 
+  /**
+   * Small request with bounded retries — CDN-fronted provider edges are
+   * intermittently flaky: a single dropped auth/categories request must not
+   * fail the whole connect. Non-transport errors (bad credentials, HTTP
+   * errors) surface immediately without retries.
+   */
+  async fetchJsonRetry(url, timeoutMs, stage, attempts = 3) {
+    let lastErr = null;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try {
+        return await this.fetchJson(url, timeoutMs, stage);
+      } catch (err) {
+        lastErr = err;
+        if (err.code !== 'timeout' && err.code !== 'network_or_cors') throw err;
+        if (attempt < attempts - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+        }
+      }
+    }
+    throw lastErr;
+  }
+
   async authenticate() {
     // No action returns user_info — the canonical credential check.
-    const data = await this.fetchJson(this.playerApi(null), 15_000, 'Anmeldung');
+    const data = await this.fetchJsonRetry(this.playerApi(null), 15_000, 'Anmeldung');
     const info = data && data.user_info;
     const ok = Boolean(info && (info.auth === 1 || info.auth === '1' || info.auth === true));
     if (!ok) {
@@ -144,7 +168,7 @@ export class XtreamAdapter {
   /** Category list (small request, cached separately from the catalog). */
   async getCategories() {
     return this.singleFlight(this.categoriesCache, CHANNEL_CACHE_MS, async () => {
-      const data = await this.fetchJson(this.playerApi('get_live_categories'), 60_000, 'Kategorien');
+      const data = await this.fetchJsonRetry(this.playerApi('get_live_categories'), 60_000, 'Kategorien');
       return (Array.isArray(data) ? data : [])
         .filter((c) => c && c.category_id != null)
         .map((c) => ({ id: String(c.category_id), name: c.category_name }));
@@ -206,14 +230,18 @@ export class XtreamAdapter {
    * Per-category fallback: instead of one huge transfer, fetch every
    * category's streams separately (get_live_streams&category_id=X —
    * ~20 KB each). Small requests survive unstable routes and flaky
-   * provider edges that repeatedly kill a 20 MB download. Each category
-   * gets two attempts; individual failures are tolerated and counted.
+   * provider edges that repeatedly kill a 20 MB download.
+   *
+   * Concurrency deliberately LOW (2): many IPTV accounts allow only one
+   * or two parallel connections (max_connections=1 is common) — aggressive
+   * pools get throttled or killed by the panel. Each category gets three
+   * attempts with short backoff; individual failures are tolerated.
    */
   async fetchStreamsByCategory(categories, onProgress, isCancelled) {
     const collected = [];
     const total = categories.length;
     const state = { done: 0, failed: 0, cancelled: false };
-    await mapPool(total, 6, async (index) => {
+    await mapPool(total, 2, async (index) => {
       if (state.cancelled) return;
       if (isCancelled && isCancelled()) {
         state.cancelled = true;
@@ -221,7 +249,7 @@ export class XtreamAdapter {
       }
       const cat = categories[index];
       let streams = null;
-      for (let attempt = 0; attempt < 2 && streams === null; attempt++) {
+      for (let attempt = 0; attempt < 3 && streams === null; attempt++) {
         try {
           const data = await this.fetchJson(
             this.playerApi('get_live_streams', { category_id: cat.id }),
@@ -230,7 +258,10 @@ export class XtreamAdapter {
           );
           streams = Array.isArray(data) ? data : [];
         } catch {
-          streams = null; // retry once, then give up on this category
+          streams = null; // retry with backoff, then give up on this category
+        }
+        if (streams === null && attempt < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
         }
       }
       state.done += 1;
@@ -269,6 +300,11 @@ export class XtreamAdapter {
       const catalog = this.buildCatalog(categories, streams);
       catalog.partial = partial;
       catalog.failedCategories = failedCategories;
+      if (catalog.channels.length === 0) {
+        // Never cache an empty catalog — the next attempt must retry
+        // instead of serving the failure from cache.
+        this.channelsCache = { data: null, at: 0, inflight: null };
+      }
       return catalog;
     });
   }

@@ -229,3 +229,66 @@ test('login rate limiting still protects the auth endpoints', async () => {
   host.server.close();
   auth.stop();
 });
+
+test('relay endpoint: session-gated, streams provider data, rejects bad input', async (t) => {
+  const provider = http.createServer((req, res) => {
+    const url = new URL(req.url, 'http://local');
+    if (url.pathname === '/api.json') {
+      res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
+      return res.end(JSON.stringify({ user_info: { auth: 1 } }));
+    }
+    res.writeHead(404, { 'content-type': 'text/plain' });
+    res.end('nf');
+  });
+  await new Promise((r) => provider.listen(0, '127.0.0.1', r));
+  const providerBase = `http://127.0.0.1:${provider.address().port}`;
+
+  const { auth, app } = makeStack();
+  const host = await listen(app);
+  t.after(() => {
+    host.server.close();
+    provider.close();
+    auth.stop();
+  });
+
+  const relay = (cookie, url, method = 'POST') =>
+    fetch(`${host.base}/api/relay`, {
+      method,
+      headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) },
+      body: JSON.stringify({ url }),
+    });
+
+  // unauthenticated -> 401
+  const anon = await relay(null, `${providerBase}/api.json`);
+  assert.equal(anon.status, 401);
+
+  // login and relay successfully
+  const creds = auth.consumeGeneratedCredentials();
+  const login = await fetch(`${host.base}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ role: 'user', password: creds.user }),
+  });
+  const cookie = login.headers.getSetCookie()[0].split(';')[0];
+
+  const ok = await relay(cookie, `${providerBase}/api.json`);
+  assert.equal(ok.status, 200);
+  assert.equal(ok.headers.get('x-aerial-relay'), '1');
+  assert.equal(ok.headers.get('cache-control'), 'no-store');
+  const body = await ok.json();
+  assert.equal(body.user_info.auth, 1);
+
+  // provider HTTP error is forwarded as-is
+  const nf = await relay(cookie, `${providerBase}/nope`);
+  assert.equal(nf.status, 404);
+
+  // bad input rejected
+  const badProto = await relay(cookie, 'file:///etc/passwd');
+  assert.equal(badProto.status, 400);
+  const noUrl = await relay(cookie, '');
+  assert.equal(noUrl.status, 400);
+
+  // GET is not the relay verb (CSRF-harder surface)
+  const get = await fetch(`${host.base}/api/relay`, { headers: { cookie } });
+  assert.equal(get.status, 404); // no GET route -> not_found
+});

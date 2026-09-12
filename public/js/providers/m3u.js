@@ -77,10 +77,12 @@ export function parseM3U(text) {
 
 /** M3U profile adapter: fetch-once catalog, optional XMLTV EPG, direct URLs. */
 export class M3UAdapter {
-  constructor({ url, epgUrl, fetchImpl = fetch, now = () => Date.now() } = {}) {
+  constructor({ url, epgUrl, fetchImpl, now = () => Date.now() } = {}) {
     this.url = String(url || '');
     this.epgUrl = epgUrl || '';
-    this.fetchImpl = fetchImpl;
+    // fetchImpl may be a direct fetch or the server-relay fetch
+    // (see providers/relayfetch.js) — the adapter code is agnostic.
+    this.fetchImpl = fetchImpl || fetch;
     this.now = now;
     this.catalog = null; // { at, data, inflight }
   }

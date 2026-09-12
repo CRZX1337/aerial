@@ -85,7 +85,7 @@ test('AUTH_OPEN=true: static app shell is served (boot path needs no cookie)', a
   const html = await page.text();
   // The open-mode bootstrap must be loaded BEFORE the app module.
   const authModeIdx = html.indexOf('/auth-mode.js?v=1');
-  const appIdx = html.indexOf('/app.js?v=12');
+  const appIdx = html.indexOf('/app.js?v=15');
   assert.ok(authModeIdx !== -1, 'auth-mode.js referenced');
   assert.ok(appIdx !== -1, 'app.js referenced');
   assert.ok(authModeIdx < appIdx, 'auth-mode.js loads before app.js');

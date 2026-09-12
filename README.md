@@ -89,6 +89,27 @@ messages** instead of silent failures. There is deliberately **no** CORS
 bypass, `no-cors` hack, or hidden relay — a provider that refuses browser
 connections simply cannot be used from the browser.
 
+### Provider relay (opt-in)
+
+For routes where the browser cannot sustain big provider downloads
+(unstable international links, browser tab throttling killing 20 MB
+catalog fetches, `max_connections=1` accounts dropping parallel
+requests), Aerial ships an opt-in relay — the same architectural pattern
+as IPTVnator's self-hosted web backend: **your own Aerial server**
+fetches catalog/EPG requests server-side and streams them to the browser.
+
+- **Automatic:** when the direct browser connection repeatedly fails,
+  Aerial retries through your server automatically and persists what
+  worked on the profile ("Profil wurde auf Server-Relay umgestellt").
+- **Manual:** per-profile checkbox *"Über eigenen Server verbinden
+  (Relay)"* in the profile dialog.
+- **Playback stays direct:** video streams never touch the relay —
+  native HLS (iOS) needs no CORS and the bandwidth belongs to the player.
+- **Security:** the relay endpoint is session-authenticated, POST-only,
+  restricts to http/https, re-validates redirects, retries transport
+  errors, and **never logs provider URLs** (they contain credentials).
+  Your server only ever sees the providers *you* configure.
+
 ### Automatic connection diagnostics & resilient catalogs
 
 When a connection fails, Aerial does not just say "network error":

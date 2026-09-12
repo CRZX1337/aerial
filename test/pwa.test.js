@@ -118,7 +118,7 @@ test('index.html has complete iOS/PWA metadata and the player app shell', () => 
   assert.doesNotMatch(html, /<script(?![^>]*src=)[^>]*>/);
 
   // App entry is an ES module (cache-busted)
-  assert.match(html, /<script type="module" src="\/app\.js\?v=12">/);
+  assert.match(html, /<script type="module" src="\/app\.js\?v=15">/);
   // Branding: Aerial
   assert.match(html, /<title>Aerial<\/title>/);
 });
@@ -217,7 +217,7 @@ test('app.js implements autoplay + recovery + lifecycle without silent errors', 
   assert.match(js, /adapter, \/\/ reuse the probed adapter/);
 
   // Connection diagnostics: https auto-upgrade + staged failure analysis
-  assert.match(js, /import \{ diagnoseStages, httpsTwin \} from '\.\/js\/providers\/netcheck\.js\?v=12'/);
+  assert.match(js, /import \{ diagnoseStages, httpsTwin \} from '\.\/js\/providers\/netcheck\.js\?v=15'/);
   assert.match(js, /function connectWithDiagnosis\(/);
   assert.match(js, /const twin = httpsTwin\(host\)/);
   assert.match(js, /diagnosisMessage/); // precise cause overrides generic message
@@ -239,6 +239,13 @@ test('app.js implements autoplay + recovery + lifecycle without silent errors', 
   assert.match(xtreamSrc, /category_id: cat\.id/);
   assert.match(xtreamSrc, /catalog\.partial = partial/);
   assert.match(xtreamSrc, /catalog\.failedCategories = failedCategories/);
+  // Small requests retry through transient edge blips; transport errors only
+  assert.match(xtreamSrc, /fetchJsonRetry\(/);
+  // Fallback stays at LOW concurrency (max_connections=1 accounts) with 3 attempts
+  assert.match(xtreamSrc, /mapPool\(total, 2,/);
+  assert.match(xtreamSrc, /attempt < 3/);
+  // Empty catalogs are never cached — retries must re-attempt
+  assert.match(xtreamSrc, /Never cache an empty catalog/);
   assert.match(xtreamSrc, /stageUrls\(\)/);
   assert.match(xtreamSrc, /probeBytes: 262_144/); // throughput measurement stage
   assert.match(fs.readFileSync(path.join(PUBLIC, 'js', 'providers', 'm3u.js'), 'utf8'), /one retry/);
@@ -251,6 +258,27 @@ test('app.js implements autoplay + recovery + lifecycle without silent errors', 
   assert.match(js, /function okDiagnosisMessage\(err, diag\)/);
   assert.match(js, /throughputKBs/);
   assert.match(js, /Diese Verbindung reicht dafür voraussichtlich nicht aus/);
+  // ... and is stage-aware: auth/categories blips are NOT reported as
+  // fallback failures
+  assert.match(js, /kurzzeitig nicht erreichbar/);
+
+  // Open-app-mode logout handling: no session to end -> button hidden,
+  // and boot records the mode from its own /api/auth/me response BEFORE
+  // enterApp runs (auth-mode.js probe can lose the race)
+  assert.match(js, /window\.__AERIAL_AUTH_MODE = 'open';\r?\n\s+window\.__AERIAL_OPEN_ROLE/);
+  assert.match(js, /if \(window\.__AERIAL_AUTH_MODE === 'open'\) \{\r?\n\s+els\.logoutBtn\.classList\.add\('hidden'\)/);
+
+  // Provider relay (opt-in, IPTVnator-style web backend pattern)
+  assert.match(js, /import \{ makeProviderFetch \} from '\.\/js\/providers\/relayfetch\.js\?v=15'/);
+  assert.match(js, /useRelay: relaid/); // remember what worked
+  assert.match(js, /useRelay: profile\.useRelay \|\| false/);
+  assert.match(js, /retryViaRelay\(\)/); // catalog retry through own server
+  assert.match(js, /Profil wurde auf Server-Relay umgestellt/);
+  assert.match(js, /pmRelay/); // per-profile relay checkbox in the modal
+  assert.match(js, /pm-relay-field/);
+  const relaySrc = fs.readFileSync(path.join(PUBLIC, 'js', 'providers', 'relayfetch.js'), 'utf8');
+  assert.match(relaySrc, /\/api\/relay/);
+  assert.match(relaySrc, /TypeError/); // relay failures classify as network errors
 });
 
 test('provider modules implement the adapter interface cleanly', () => {

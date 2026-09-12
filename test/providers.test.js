@@ -384,7 +384,74 @@ test('XtreamAdapter: everything failing resolves to an empty partial catalog (no
   assert.equal(catalog.channels.length, 0);
   assert.equal(catalog.partial, true);
   assert.equal(catalog.failedCategories, 1);
-  assert.equal(streamsCalls, 4, '2 full attempts + 2 category attempts');
+  assert.equal(streamsCalls, 5, '2 full attempts + 3 category attempts');
+
+  // Empty catalogs are never cached — the next call retries from scratch.
+  const before = streamsCalls;
+  const again = await adapter.getChannels();
+  assert.equal(again.channels.length, 0);
+  assert.ok(streamsCalls > before, 'second getChannels re-attempted the catalog');
+});
+
+test('XtreamAdapter: small requests (auth/categories) retry through transient blips', async () => {
+  let authCalls = 0;
+  let catCalls = 0;
+  const fetchImpl = async (url) => {
+    const u = new URL(String(url));
+    if (!u.searchParams.get('action')) {
+      authCalls += 1;
+      if (authCalls === 1) throw new TypeError('Failed to fetch'); // transient
+      return jsonResponse({ user_info: { auth: 1 } });
+    }
+    if (u.searchParams.get('action') === 'get_live_categories') {
+      catCalls += 1;
+      if (catCalls <= 2) throw new TypeError('Failed to fetch'); // two blips
+      return jsonResponse([{ category_id: '1', category_name: 'A' }]);
+    }
+    return jsonResponse([]);
+  };
+  const adapter = new XtreamAdapter({ host: 'http://p.example', username: 'u', password: 'p', fetchImpl });
+  await adapter.authenticate(); // survives the first-call blip
+  const cats = await adapter.getCategories(); // survives two blips
+  assert.equal(cats.length, 1);
+  assert.equal(authCalls, 2);
+  assert.equal(catCalls, 3);
+});
+
+test('XtreamAdapter: small-request retries stop after three attempts', async () => {
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    throw new TypeError('Failed to fetch');
+  };
+  const adapter = new XtreamAdapter({ host: 'http://p.example', username: 'u', password: 'p', fetchImpl });
+  await assert.rejects(() => adapter.authenticate(), (e) => e.code === 'network_or_cors');
+  assert.equal(calls, 3, 'three attempts, then the error surfaces');
+});
+
+test('XtreamAdapter: per-category fallback stays at low concurrency', async () => {
+  const cats = Array.from({ length: 8 }, (_, i) => ({ category_id: String(i), category_name: `C${i}` }));
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const fetchImpl = async (url) => {
+    const u = new URL(String(url));
+    const action = u.searchParams.get('action');
+    if (action === 'get_live_streams' && !u.searchParams.get('category_id')) {
+      throw new TypeError('Failed to fetch'); // big transfer always dies
+    }
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise((r) => setTimeout(r, 25));
+    inFlight -= 1;
+    if (action === 'get_live_categories') return jsonResponse(cats);
+    const cid = u.searchParams.get('category_id');
+    return jsonResponse([{ stream_id: cid, name: 'C', category_id: cid, stream_type: 'live' }]);
+  };
+  const adapter = new XtreamAdapter({ host: 'http://p.example', username: 'u', password: 'p', fetchImpl });
+  const catalog = await adapter.getChannels();
+  assert.equal(catalog.channels.length, 8);
+  assert.equal(catalog.partial, true);
+  assert.ok(maxInFlight <= 2, `max concurrent provider requests was ${maxInFlight}, must stay <= 2 (max_connections=1 accounts)`);
 });
 
 test('XtreamAdapter: credentials are URL-encoded in stream URLs', () => {

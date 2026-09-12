@@ -124,14 +124,14 @@ test('e2e: login → app shell → user connects their own provider from the cli
   const page = await authed(user.cookie, '/');
   assert.equal(page.status, 200);
   const html = await page.text();
-  assert.match(html, /type="module" src="\/app\.js\?v=12"/);
+  assert.match(html, /type="module" src="\/app\.js\?v=15"/);
   for (const asset of [
-    '/app.js?v=12',
-    '/js/providers/xtream.js?v=12',
-    '/js/providers/m3u.js?v=12',
-    '/js/providers/xmltv.js?v=12',
-    '/js/providers/netcheck.js?v=12',
-    '/js/profiles.js?v=12',
+    '/app.js?v=15',
+    '/js/providers/xtream.js?v=15',
+    '/js/providers/m3u.js?v=15',
+    '/js/providers/xmltv.js?v=15',
+    '/js/providers/netcheck.js?v=15',
+    '/js/profiles.js?v=15',
   ]) {
     const res = await authed(user.cookie, asset);
     assert.equal(res.status, 200, `${asset} served`);

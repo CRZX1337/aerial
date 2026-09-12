@@ -1,7 +1,8 @@
-import { XtreamAdapter } from './js/providers/xtream.js?v=12';
-import { M3UAdapter } from './js/providers/m3u.js?v=12';
-import { fetchXmltv, parseXMLTV, shortEpg } from './js/providers/xmltv.js?v=12';
-import { diagnoseStages, httpsTwin } from './js/providers/netcheck.js?v=12';
+import { XtreamAdapter } from './js/providers/xtream.js?v=15';
+import { M3UAdapter } from './js/providers/m3u.js?v=15';
+import { fetchXmltv, parseXMLTV, shortEpg } from './js/providers/xmltv.js?v=15';
+import { diagnoseStages, httpsTwin } from './js/providers/netcheck.js?v=15';
+import { makeProviderFetch } from './js/providers/relayfetch.js?v=15';
 import {
   loadProfiles,
   upsertProfile,
@@ -16,7 +17,7 @@ import {
   saveFavorites,
   getRecent,
   pushRecent,
-} from './js/profiles.js?v=12';
+} from './js/profiles.js?v=15';
 
 (function () {
   'use strict';
@@ -151,6 +152,7 @@ import {
     pmPassword: $('pm-password'),
     pmEpg: $('pm-epg'),
     pmRemember: $('pm-remember'),
+    pmRelay: $('pm-relay'),
     pmSubmit: $('pm-submit'),
     pmCancel: $('pm-cancel'),
     pmError: $('pm-error'),
@@ -159,6 +161,7 @@ import {
     pmPassField: $('pm-pass-field'),
     pmEpgField: $('pm-epg-field'),
     pmRememberField: $('pm-remember-field'),
+    pmRelayField: $('pm-relay-field'),
     pmTypeField: $('pm-type-field'),
   };
 
@@ -303,7 +306,14 @@ import {
     hideAllViews();
     els.roleBadge.textContent = role.toUpperCase();
     els.roleBadge.classList.remove('hidden');
-    els.logoutBtn.classList.remove('hidden');
+    // Open app mode (AUTH_OPEN=true): there is no session to end — a
+    // logout button would be a dead button. Hide it entirely; the click
+    // handler keeps a defensive check for late mode flips.
+    if (window.__AERIAL_AUTH_MODE === 'open') {
+      els.logoutBtn.classList.add('hidden');
+    } else {
+      els.logoutBtn.classList.remove('hidden');
+    }
 
     profiles = loadProfiles();
     if (!profiles.length) {
@@ -452,8 +462,8 @@ import {
   }
 
   /** Adapter for a (possibly upgraded) host — used for staged diagnosis. */
-  function buildStageUrls(type, host, username, password, epgUrl) {
-    const { adapter } = createAdapter({ type, host, username, password, epgUrl });
+  function buildStageUrls(type, host, username, password, epgUrl, useRelay) {
+    const { adapter } = createAdapter({ type, host, username, password, epgUrl, useRelay });
     return typeof adapter.stageUrls === 'function' ? adapter.stageUrls() : null;
   }
 
@@ -465,8 +475,8 @@ import {
    * authentication, so the catalog loads here.
    * Returns the adapter, throws the provider error.
    */
-  async function attemptConnect({ type, host, username, password, epgUrl }) {
-    const { adapter } = createAdapter({ type, host, username, password, epgUrl });
+  async function attemptConnect({ type, host, username, password, epgUrl, useRelay }) {
+    const { adapter } = createAdapter({ type, host, username, password, epgUrl, useRelay });
     if (type === 'xtream') {
       await adapter.authenticate();
       await adapter.getCategories();
@@ -482,26 +492,28 @@ import {
   }
 
   /**
-   * Connect with automatic HTTPS upgrade + staged failure diagnosis.
+   * Connect with automatic HTTPS upgrade, automatic relay upgrade and
+   * staged failure diagnosis.
    *
    * Transport failures in browsers are opaque (DNS block, adblocker,
    * firewall, slow links and genuine CORS refusals all look alike), and a
    * timed-out 20 MB catalog fetch used to be misreported as "CORS". Now:
-   *  - timeouts get their own error class (code 'timeout') with a large
-   *    catalog budget (90s) in the adapters
+   *  - direct connection first (fastest path when the route is healthy)
    *  - http:// hosts failing at transport level try the https:// twin
-   *  - if everything fails, the provider's REAL request sequence
-   *    (Anmeldung -> Kategorien -> Senderliste) is re-run stage by stage
-   *    to pinpoint the failing step and its actual cause
+   *  - if the browser connection keeps failing: automatic retry through
+   *    the user's own server (relay — same pattern as IPTVnator's web
+   *    backend; survives browser-killed downloads and max_connections=1)
+   *  - if everything fails, the provider's REAL request sequence is re-run
+   *    stage by stage to pinpoint the failing step and its actual cause
    *
-   * Returns { adapter, host, upgraded }. Throws an error enriched with
-   * `diagnosisMessage` and `testUrl` when everything failed.
+   * Returns { adapter, host, upgraded, relaid }. Throws an error enriched
+   * with `diagnosisMessage` and `testUrl` when everything failed.
    */
-  async function connectWithDiagnosis({ type, host, username, password, epgUrl }) {
+  async function connectWithDiagnosis({ type, host, username, password, epgUrl, useRelay }) {
     let firstErr = null;
     try {
-      const adapter = await attemptConnect({ type, host, username, password, epgUrl });
-      return { adapter, host, upgraded: false };
+      const adapter = await attemptConnect({ type, host, username, password, epgUrl, useRelay });
+      return { adapter, host, upgraded: false, relaid: Boolean(useRelay) };
     } catch (err) {
       if (!isNetworkFailure(err) && !isTimeoutFailure(err)) throw err; // real provider answer
       firstErr = err;
@@ -510,16 +522,30 @@ import {
     // Transport-level failure on http://: try the https twin before giving
     // up (NOT for timeouts — the twin sits on the same edge and would only
     // double the wait).
-    if (isNetworkFailure(firstErr)) {
+    if (!useRelay && isNetworkFailure(firstErr)) {
       const twin = httpsTwin(host);
       if (twin) {
         try {
           const adapter = await attemptConnect({ type, host: twin, username, password, epgUrl });
-          return { adapter, host: twin, upgraded: true };
+          return { adapter, host: twin, upgraded: true, relaid: false };
         } catch (err) {
           if (!isNetworkFailure(err) && !isTimeoutFailure(err)) throw err; // https answered — trust it
           firstErr = firstErr || err;
         }
+      }
+    }
+
+    // Browser connection keeps failing: retry through the user's own
+    // server (relay). Server-side downloads survive browser tab throttling
+    // and the server bundles provider traffic — exactly what fails on
+    // unstable routes and max_connections=1 accounts.
+    if (!useRelay) {
+      try {
+        const adapter = await attemptConnect({ type, host, username, password, epgUrl, useRelay: true });
+        return { adapter, host, upgraded: false, relaid: true };
+      } catch (err) {
+        if (!isNetworkFailure(err) && !isTimeoutFailure(err)) throw err; // real provider answer via relay
+        firstErr = firstErr || err;
       }
     }
 
@@ -528,7 +554,7 @@ import {
     const wrap = firstErr || new Error('Verbindung fehlgeschlagen.');
     wrap.code = wrap.code || 'network_or_cors';
     wrap.providerUrl = host;
-    const stages = buildStageUrls(type, host, username, password, epgUrl);
+    const stages = buildStageUrls(type, host, username, password, epgUrl, useRelay);
     if (stages) {
       const diag = await diagnoseStages(stages);
       if (diag.kind === 'ok') {
@@ -571,12 +597,22 @@ import {
       );
     }
     if (isNetworkFailure(err)) {
+      // A SMALL request (auth/categories) failed transiently and everything
+      // passes now — the catalog fallback never came into play. With the
+      // adapter's own retries this is rare, but the message must not claim
+      // a fallback failure that never happened.
+      if (err && (err.stage === 'Anmeldung' || err.stage === 'Kategorien')) {
+        return (
+          'Der Anbieter war bei der Anmeldung bzw. Kategorien-Abfrage kurzzeitig nicht erreichbar, antwortet aber jetzt auf alle Anfragen. ' +
+          'Bitte erneut versuchen.'
+        );
+      }
       let detail = '';
       if (diag && diag.throughputKBs && diag.throughputKBs >= 1) {
         detail = ` Geschwindigkeit bei kleinen Anfragen: ~${Math.round(diag.throughputKBs)} KB/s.`;
       }
       return (
-        'Der Anbieter antwortet auf kleine Anfragen, aber die große Senderliste (20+ MB) wird auf dieser Verbindung wiederholt abgebrochen — auch der kategorie-weise Ladeversuch war nicht erfolgreich.' +
+        'Der Anbieter antwortet auf kleine Anfragen, aber die große Senderliste (20+ MB) wird auf dieser Verbindung wiederholt abgebrochen — auch der kategorie-weise Ladeversuch brachte keine Sender.' +
         detail +
         ' Lösungen: VPN oder ein anderes Netzwerk nutzen (andere Route zum Anbieter) und erneut versuchen.'
       );
@@ -608,7 +644,7 @@ import {
     els.obSubmit.querySelector('span').textContent = 'Verbinde …';
     els.onboardError.textContent = '';
     try {
-      const { adapter, host: connectedHost, upgraded } = await connectWithDiagnosis({
+      const { adapter, host: connectedHost, upgraded, relaid } = await connectWithDiagnosis({
         type: onboardType, host, username, password, epgUrl,
       });
 
@@ -619,6 +655,7 @@ import {
         host: connectedHost, // https twin when the http host was unreachable
         username: onboardType === 'xtream' ? username : '',
         epgUrl: onboardType === 'm3u' ? epgUrl || '' : '',
+        useRelay: relaid, // remember what worked
         createdAt: Date.now(),
         lastUsedAt: Date.now(),
       });
@@ -631,9 +668,11 @@ import {
         secret: onboardType === 'xtream' ? password : null,
         adapter, // reuse the probed adapter — auth/categories stay cached
       });
-      toast(upgraded
-        ? 'Verbunden über HTTPS — Senderliste wird geladen'
-        : `${profile.name} verbunden — Senderliste wird geladen`);
+      toast(relaid
+        ? 'Verbunden über eigenen Server (Relay) — Senderliste wird geladen'
+        : upgraded
+          ? 'Verbunden über HTTPS — Senderliste wird geladen'
+          : `${profile.name} verbunden — Senderliste wird geladen`);
     } catch (err) {
       if (err && !err.providerUrl) err.providerUrl = host;
       renderProviderError(els.onboardError, err);
@@ -691,12 +730,13 @@ import {
   });
 
   // ---------------------------------------------------------- connections ---
-  function createAdapter({ type, host, username, password, epgUrl }) {
+  function createAdapter({ type, host, username, password, epgUrl, useRelay }) {
+    const fetchImpl = makeProviderFetch({ useRelay });
     if (type === 'xtream') {
-      return { type, adapter: new XtreamAdapter({ host, username, password }) };
+      return { type, adapter: new XtreamAdapter({ host, username, password, fetchImpl }) };
     }
     if (type === 'm3u') {
-      return { type, adapter: new M3UAdapter({ url: host, epgUrl }) };
+      return { type, adapter: new M3UAdapter({ url: host, epgUrl, fetchImpl }) };
     }
     throw new Error('Unbekannter Verbindungstyp.');
   }
@@ -739,6 +779,7 @@ import {
       username: profile.username,
       password: memorySecret,
       epgUrl: profile.epgUrl,
+      useRelay: profile.useRelay || false,
     });
     // Onboarding / profile creation already probed a fully authenticated
     // adapter with a cached catalog — reuse it instead of re-fetching
@@ -755,17 +796,53 @@ import {
     renderChannels();
     renderProfileList();
 
+    /** Persist a successful strategy change (https / relay) on the profile. */
+    const persistStrategy = (patch) => {
+      const current = getProfile(id);
+      if (current) upsertProfile({ ...current, ...patch, lastUsedAt: Date.now() });
+      profiles = loadProfiles();
+    };
+
+    /** Direct-connection catalog load failed at transport level: retry via
+     *  the user's own server (relay). Returns the catalog or null. */
+    const retryViaRelay = async () => {
+      const relayAdapter = createAdapter({
+        type: profile.type,
+        host: profile.host,
+        username: profile.username,
+        password: memorySecret,
+        epgUrl: profile.epgUrl,
+        useRelay: true,
+      }).adapter;
+      const relayCatalog = await relayAdapter.getChannels(
+        (done, total, failed) => updateListProgress(done, total, failed),
+        () => token !== connectToken,
+      );
+      if (token !== connectToken) return null;
+      if (!relayCatalog.channels.length) return null;
+      adapter = relayAdapter;
+      persistStrategy({ useRelay: true });
+      return relayCatalog;
+    };
+
     try {
       // Resilient catalog load: one big transfer first, per-category
       // fallback with live progress when the route keeps killing it.
-      const catalog = await adapter.getChannels(
+      let catalog = await adapter.getChannels(
         (done, total, failed) => updateListProgress(done, total, failed),
         () => token !== connectToken, // stop loading when a newer connect won
       );
       if (token !== connectToken) return; // stale — a newer connect won
 
+      if (!catalog.channels.length && !(profile.useRelay)) {
+        // Direct load (incl. per-category fallback) produced nothing — the
+        // browser route keeps killing it. One relay attempt before giving up.
+        catalog = (await retryViaRelay()) || catalog;
+        if (token !== connectToken) return;
+      }
+
       if (!catalog.channels.length) {
-        catalogError = 'Der Anbieter hat keine Sender geliefert (auch der kategorie-weise Ladeversuch brachte keine Sender).';
+        catalogError = 'Der Anbieter hat keine Sender geliefert (auch der kategorie-weise und Relay-Ladeversuch brachte keine Sender).';
         els.connDot.className = 'conn-dot off';
       } else {
         channels = catalog.channels;
@@ -773,6 +850,9 @@ import {
         listVersion += 1; // catalog changed — force a fresh windowed render
         catalogError = null;
         els.connDot.className = 'conn-dot on';
+        if (profile.useRelay === false && adapter !== built.adapter) {
+          toast('Direkte Verbindung instabil — Profil wurde auf Server-Relay umgestellt.');
+        }
         if (catalog.partial) {
           toast(
             catalog.failedCategories > 0
@@ -788,6 +868,8 @@ import {
 
       // Transport-level failure on a stored http:// host: retry the https
       // twin — if it works, persist the upgrade so it sticks.
+      // Transport-level failure on a stored http:// host: retry the https
+      // twin — if it works, persist the upgrade so it sticks.
       if (isNetworkFailure(err)) {
         const twin = httpsTwin(profile.host);
         if (twin) {
@@ -798,6 +880,7 @@ import {
               username: profile.username,
               password: memorySecret,
               epgUrl: profile.epgUrl,
+              useRelay: profile.useRelay || false,
             }).adapter;
             const catalog = await upgradedAdapter.getChannels(
               (done, total, failed) => updateListProgress(done, total, failed),
@@ -811,8 +894,7 @@ import {
             listVersion += 1;
             catalogError = null;
             els.connDot.className = 'conn-dot on';
-            upsertProfile({ ...getProfile(id), host: twin, lastUsedAt: Date.now() });
-            profiles = loadProfiles();
+            persistStrategy({ host: twin });
             toast('HTTP nicht erreichbar — Profil wurde auf HTTPS umgestellt.');
             renderProfileList();
             return;
@@ -825,6 +907,25 @@ import {
             }
           }
         }
+      }
+
+      // Still a transport failure and not on relay yet: the browser route
+      // to the provider is unusable — last resort is the own-server relay.
+      if ((isNetworkFailure(err) || isTimeoutFailure(err)) && !profile.useRelay) {
+        try {
+          const catalog = await retryViaRelay();
+          if (token !== connectToken) return;
+          if (catalog && catalog.channels.length) {
+            channels = catalog.channels;
+            categories = catalog.categories;
+            listVersion += 1;
+            catalogError = null;
+            els.connDot.className = 'conn-dot on';
+            toast('Direkte Verbindung instabil — Profil wurde auf Server-Relay umgestellt.');
+            renderProfileList();
+            return;
+          }
+        } catch { /* relay attempt failed too — fall through to diagnosis */ }
       }
 
       if (err && !err.providerUrl) err.providerUrl = profile.host;
@@ -896,7 +997,7 @@ import {
     name.textContent = p.name || p.host;
     const meta = document.createElement('div');
     meta.className = 'profile-meta';
-    meta.textContent = `${p.type === 'xtream' ? 'Xtream' : 'M3U'} · ${p.host}`;
+    meta.textContent = `${p.type === 'xtream' ? 'Xtream' : 'M3U'} · ${p.host}${p.useRelay ? ' · Relay' : ''}`;
     body.appendChild(name);
     body.appendChild(meta);
     if (p.id === activeProfileId) {
@@ -989,6 +1090,7 @@ import {
     els.pmPassword.placeholder = profile ? 'leer lassen = unverändert' : 'Passwort';
     els.pmEpg.value = profile ? profile.epgUrl || '' : '';
     els.pmRemember.checked = profile ? Boolean(getRememberedSecret(profile.id)) : false;
+    els.pmRelay.checked = profile ? Boolean(profile.useRelay) : false;
     syncProfileFormFields();
     els.modalBackdrop.classList.remove('hidden');
   }
@@ -1006,6 +1108,8 @@ import {
     els.pmPassField.classList.toggle('hidden', isM3U);
     els.pmEpgField.classList.toggle('hidden', !isM3U);
     els.pmRememberField.classList.toggle('hidden', isM3U);
+    // Relay works for both provider types.
+    els.pmRelayField.classList.toggle('hidden', false);
   }
 
   els.pmType.addEventListener('change', syncProfileFormFields);
@@ -1025,6 +1129,7 @@ import {
     const password = els.pmPassword.value;
     const epgUrl = els.pmEpg.value.trim();
     const remember = type === 'xtream' && els.pmRemember.checked;
+    const useRelay = els.pmRelay.checked;
 
     if (!/^https?:\/\//i.test(host)) {
       els.pmError.textContent = 'Die URL muss mit http:// oder https:// beginnen.';
@@ -1049,14 +1154,15 @@ import {
           host,
           username: type === 'xtream' ? (username || existing.username) : '',
           epgUrl: type === 'm3u' ? epgUrl : '',
+          useRelay,
         });
         if (password) setRememberedSecret(saved.id, remember ? password : null);
         else if (!remember) setRememberedSecret(saved.id, null);
       } else {
         // New profile: validate the connection before saving (with
-        // automatic https upgrade + diagnosis on transport failures).
-        const { adapter, host: connectedHost, upgraded } = await connectWithDiagnosis({
-          type, host, username, password, epgUrl,
+        // automatic https upgrade, relay upgrade + diagnosis on failures).
+        const { adapter, host: connectedHost, upgraded, relaid } = await connectWithDiagnosis({
+          type, host, username, password, epgUrl, useRelay,
         });
         probeRef = adapter;
         saved = upsertProfile({
@@ -1066,11 +1172,13 @@ import {
           host: connectedHost, // https twin when http was unreachable
           username: type === 'xtream' ? username : '',
           epgUrl: type === 'm3u' ? epgUrl : '',
+          useRelay: relaid || useRelay, // remember what worked / was chosen
           createdAt: Date.now(),
           lastUsedAt: Date.now(),
         });
         if (remember) setRememberedSecret(saved.id, password);
-        if (upgraded) toast('HTTP nicht erreichbar — HTTPS-Variante wird verwendet.');
+        if (relaid) toast('Direkte Verbindung instabil — es wird der eigene Server (Relay) verwendet.');
+        else if (upgraded) toast('HTTP nicht erreichbar — HTTPS-Variante wird verwendet.');
       }
       closeProfileModal();
       profiles = loadProfiles();
@@ -1884,6 +1992,14 @@ import {
     }
     try {
       const me = await api('/api/auth/me');
+      // auth-mode.js runs its own /api/auth/me probe — whichever response
+      // arrives FIRST must win. If ours resolves first we still have to
+      // record the open mode BEFORE enterApp, otherwise the logout button
+      // would be shown for a mode that has no session to end.
+      if (me && me.authMode === 'open' && me.authenticated) {
+        window.__AERIAL_AUTH_MODE = 'open';
+        window.__AERIAL_OPEN_ROLE = me.role || 'user';
+      }
       if (me.authenticated && me.role) enterApp(me.role);
       else showLogin();
     } catch {
