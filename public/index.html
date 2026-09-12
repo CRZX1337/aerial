@@ -13,7 +13,7 @@
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
-  <link rel="stylesheet" href="/styles.css?v=19" />
+  <link rel="stylesheet" href="/styles.css?v=21" />
 </head>
 <body>
   <!-- Ambient liquid-glass background -->
@@ -309,6 +309,21 @@
             </button>
           </div>
           <div id="profile-list" class="profile-list"></div>
+          <div class="settings-card glass">
+            <div class="section-label">Einstellungen</div>
+            <div class="setting-row">
+              <div>
+                <div class="setting-name">Sendernamen</div>
+                <div class="setting-hint">Darstellung der Namen auf den Senderkarten</div>
+              </div>
+              <div class="seg" id="namemode-seg" role="group" aria-label="Sendernamen-Darstellung">
+                <button type="button" data-mode="auto">Auto</button>
+                <button type="button" data-mode="one">1 Zeile</button>
+                <button type="button" data-mode="two">2 Zeilen</button>
+                <button type="button" data-mode="full">Voll</button>
+              </div>
+            </div>
+          </div>
           <div class="profile-note">
             Aerial hostet kein IPTV. Jedes Profil verbindet sich direkt von deinem Gerät
             mit deinem eigenen Anbieter. Passwörter werden nur bei aktiviertem
@@ -408,6 +423,6 @@
 
   <script src="/vendor/hls.min.js"></script>
   <script src="/auth-mode.js?v=1"></script>
-  <script type="module" src="/app.js?v=20"></script>
+  <script type="module" src="/app.js?v=21"></script>
 </body>
 </html>

@@ -132,6 +132,13 @@ test('index.html has complete iOS/PWA metadata and the player app shell', () => 
   assert.match(html, /id="category-chips" class="category-list"/);
   assert.match(html, /class="section-label sender-label">Sender/);
 
+  // Settings: channel-name display modes (segmented control, 4 options)
+  assert.match(html, /class="settings-card glass"/);
+  assert.match(html, /id="namemode-seg"/);
+  for (const mode of ['auto', 'one', 'two', 'full']) {
+    assert.match(html, new RegExp(`data-mode="${mode}"`), `mode button ${mode}`);
+  }
+
   // Exactly one video element (single stream, no parallel players)
   assert.equal((html.match(/<video/g) || []).length, 1);
   // No inline styles or scripts (CSP keeps style-src/script-src 'self')
@@ -139,7 +146,7 @@ test('index.html has complete iOS/PWA metadata and the player app shell', () => 
   assert.doesNotMatch(html, /<script(?![^>]*src=)[^>]*>/);
 
   // App entry is an ES module (cache-busted)
-  assert.match(html, /<script type="module" src="\/app\.js\?v=20">/);
+  assert.match(html, /<script type="module" src="\/app\.js\?v=21">/);
   // Branding: Aerial
   assert.match(html, /<title>Aerial<\/title>/);
 });
@@ -286,12 +293,24 @@ test('app.js implements autoplay + recovery + lifecycle without silent errors', 
   assert.match(js, /row\.setAttribute\('role', 'button'\)/);
   assert.match(js, /row\.addEventListener\('keydown'/);
 
+  // Channel-name display modes: persisted setting, 4 modes, auto = viewport
+  assert.match(js, /import \{[\s\S]*?getSetting,/); // settings imports exist (exact set checked by the module-graph test)
+  assert.match(js, /NAME_MODES = \['auto', 'one', 'two', 'full'\]/);
+  assert.match(js, /let nameMode = 'auto'/);
+  assert.match(js, /getSetting\('nameMode', 'auto'\)/);
+  assert.match(js, /setSetting\('nameMode', nameMode\)/);
+  assert.match(js, /function applyNameMode\(\)/);
+  assert.match(js, /AUTO_PHONE_MAX_VIEWPORT = 700/);
+  assert.match(js, /'nm-' \+ resolvedNameMode\(\)/); // class toggle, no re-render
+  assert.match(js, /window\.addEventListener\('resize'/); // auto follows rotation/resize
+  assert.match(js, /NAME_MODES\.includes\(stored\)/); // invalid stored values fall back to auto
+
   // Onboarding hands the probed adapter to connectProfile (auth/categories
   // stay cached; the catalog loads once inside connectProfile)
   assert.match(js, /adapter, \/\/ reuse the probed adapter/);
 
   // Connection diagnostics: https auto-upgrade + staged failure analysis
-  assert.match(js, /import \{ diagnoseStages, httpsTwin \} from '\.\/js\/providers\/netcheck\.js\?v=20'/);
+  assert.match(js, /import \{ diagnoseStages, httpsTwin \} from '\.\/js\/providers\/netcheck\.js\?v=21'/);
   assert.match(js, /function connectWithDiagnosis\(/);
   assert.match(js, /const twin = httpsTwin\(host\)/);
   assert.match(js, /diagnosisMessage/); // precise cause overrides generic message
@@ -343,7 +362,7 @@ test('app.js implements autoplay + recovery + lifecycle without silent errors', 
   assert.match(js, /if \(window\.__AERIAL_AUTH_MODE === 'open'\) \{\r?\n\s+els\.logoutBtn\.classList\.add\('hidden'\)/);
 
   // Provider relay (opt-in, IPTVnator-style web backend pattern)
-  assert.match(js, /import \{ makeProviderFetch \} from '\.\/js\/providers\/relayfetch\.js\?v=20'/);
+  assert.match(js, /import \{ makeProviderFetch \} from '\.\/js\/providers\/relayfetch\.js\?v=21'/);
   assert.match(js, /useRelay: relaid/); // remember what worked
   assert.match(js, /useRelay: profile\.useRelay \|\| false/);
   assert.match(js, /retryViaRelay\(\)/); // catalog retry through own server
@@ -449,6 +468,19 @@ test('styles.css covers safe areas, dark scheme and app-like touch behaviour', (
   assert.match(css, /\.cat-star/);
   assert.match(css, /\.cat-star\.on svg path \{ fill: currentColor; \}/, 'pinned = filled star');
   assert.match(css, /\.cat-sub-label/);
+  // Channel-name display modes: base stays single-line (readable, 14px),
+  // two = clamp after 2 lines, full = wraps completely
+  const nmTwo = css.match(/\.channel-list\.nm-two \.channel-name \{[^}]*\}/)[0];
+  assert.match(nmTwo, /-webkit-line-clamp:\s*2/);
+  assert.match(nmTwo, /white-space:\s*normal/);
+  assert.match(nmTwo, /min-height:\s*2\.64em/, 'two-line rows align the category line');
+  const nmFull = css.match(/\.channel-list\.nm-full \.channel-name \{[^}]*\}/)[0];
+  assert.match(nmFull, /white-space:\s*normal/);
+  assert.match(nmFull, /overflow-wrap:\s*break-word/);
+  assert.ok(!/font-size/.test(nmTwo) && !/font-size/.test(nmFull), 'modes never shrink the font');
+  // Settings segmented control
+  assert.match(css, /\.settings-card/);
+  assert.match(css, /\.seg button\.active/);
   assert.doesNotMatch(css, /\.category-chips\b/, 'horizontal chips are gone');
   const headBlock = css.match(/\.browser-head \{[\s\S]*?\}/)[0];
   assert.match(headBlock, /flex-shrink:\s*0/, 'search row protected');

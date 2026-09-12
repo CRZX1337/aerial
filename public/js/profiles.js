@@ -125,6 +125,22 @@ export function saveCategoryFavorites(profileId, set) {
   writeJson(KEY_CATFAVS(profileId), [...set]);
 }
 
+// ---- device-level settings (display preferences) ----------------------------
+
+const KEY_SETTINGS = 'aerial_settings';
+
+export function getSetting(key, fallback) {
+  const all = readJson(KEY_SETTINGS, {});
+  return all && typeof all === 'object' && key in all ? all[key] : fallback;
+}
+
+export function setSetting(key, value) {
+  const all = readJson(KEY_SETTINGS, {});
+  const next = all && typeof all === 'object' ? all : {};
+  next[key] = value;
+  writeJson(KEY_SETTINGS, next);
+}
+
 // ---- per-profile recently watched --------------------------------------------
 
 const RECENT_MAX = 20;

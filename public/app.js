@@ -1,8 +1,8 @@
-import { XtreamAdapter } from './js/providers/xtream.js?v=20';
-import { M3UAdapter } from './js/providers/m3u.js?v=20';
-import { fetchXmltv, parseXMLTV, shortEpg } from './js/providers/xmltv.js?v=20';
-import { diagnoseStages, httpsTwin } from './js/providers/netcheck.js?v=20';
-import { makeProviderFetch } from './js/providers/relayfetch.js?v=20';
+import { XtreamAdapter } from './js/providers/xtream.js?v=21';
+import { M3UAdapter } from './js/providers/m3u.js?v=21';
+import { fetchXmltv, parseXMLTV, shortEpg } from './js/providers/xmltv.js?v=21';
+import { diagnoseStages, httpsTwin } from './js/providers/netcheck.js?v=21';
+import { makeProviderFetch } from './js/providers/relayfetch.js?v=21';
 import {
   loadProfiles,
   upsertProfile,
@@ -19,7 +19,9 @@ import {
   saveCategoryFavorites,
   getRecent,
   pushRecent,
-} from './js/profiles.js?v=20';
+  getSetting,
+  setSetting,
+} from './js/profiles.js?v=21';
 
 (function () {
   'use strict';
@@ -38,6 +40,10 @@ import {
   let search = '';
   let activeCategory = 'all';
   let favOnly = false;
+  // Channel-name display mode on the cards: 'auto' | 'one' | 'two' | 'full'
+  // (persisted device-level setting; see profiles.js getSetting/setSetting)
+  let nameMode = 'auto';
+  let nameModeResizeTimer = null;
   let loadingChannels = false;
   let connectToken = 0; // provider-connect race guard
   let currentChannel = null;
@@ -104,6 +110,7 @@ import {
     searchInput: $('search-input'),
     searchClear: $('search-clear'),
     favToggle: $('fav-toggle'),
+    nameModeSeg: $('namemode-seg'),
     catSectionLabel: $('cat-section-label'),
     categoryChips: $('category-chips'),
     channelList: $('channel-list'),
@@ -1248,6 +1255,67 @@ import {
   function updateFavToggle() {
     if (els.favToggle) els.favToggle.classList.toggle('active', favOnly);
   }
+
+  // ---------------------------------------------------- channel name modes --
+  // 'one'   – single line, clean ellipsis (base CSS rule)
+  // 'two'   – up to two lines, ellipsis after line 2
+  // 'full'  – full name, card grows (grid rows stay aligned via stretch)
+  // 'auto'  – phones (<700px viewport) resolve to 'two' so most of the
+  //           name stays visible; larger displays save space with 'one'
+  const NAME_MODES = ['auto', 'one', 'two', 'full'];
+  const AUTO_PHONE_MAX_VIEWPORT = 700;
+
+  function resolvedNameMode() {
+    if (nameMode !== 'auto') return nameMode;
+    return (typeof window !== 'undefined' && window.innerWidth || 0) < AUTO_PHONE_MAX_VIEWPORT
+      ? 'two'
+      : 'one';
+  }
+
+  function applyNameMode() {
+    if (!els.channelList) return;
+    els.channelList.classList.remove('nm-one', 'nm-two', 'nm-full');
+    els.channelList.classList.add('nm-' + resolvedNameMode());
+    els.channelList.dataset.nameMode = nameMode;
+  }
+
+  function initNameMode() {
+    const stored = getSetting('nameMode', 'auto');
+    nameMode = NAME_MODES.includes(stored) ? stored : 'auto';
+    applyNameMode();
+
+    // Auto mode tracks viewport changes (rotation, window resize) — class
+    // toggle only, no re-render needed.
+    window.addEventListener('resize', () => {
+      if (nameMode !== 'auto') return;
+      clearTimeout(nameModeResizeTimer);
+      nameModeResizeTimer = setTimeout(applyNameMode, 150);
+    });
+
+    // Settings UI (profiles pane): segmented control for the name mode.
+    const seg = els.nameModeSeg;
+    if (!seg) return;
+    const buttons = Array.from(seg.querySelectorAll('button'));
+    const sync = () => {
+      for (const b of buttons) {
+        const on = b.dataset.mode === nameMode;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      }
+    };
+    for (const b of buttons) {
+      b.addEventListener('click', () => {
+        const mode = b.dataset.mode;
+        if (!NAME_MODES.includes(mode) || mode === nameMode) return;
+        nameMode = mode;
+        setSetting('nameMode', nameMode);
+        applyNameMode();
+        sync();
+      });
+    }
+    sync();
+  }
+  initNameMode();
 
   // -------------------------------------------------------------- channels --
   // Leading glyphs for the vertical category navigation (static SVG, CSP-safe)

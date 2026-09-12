@@ -1151,6 +1151,66 @@ input, [contenteditable="true"], .guide-item-desc {
   white-space: nowrap;
 }
 
+/* Channel name display modes (class on .channel-list).
+   Base rule = single line with ellipsis ("Einzeilig"). */
+.channel-list.nm-two .channel-name {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.32;
+  min-height: 2.64em; /* aligns the category line across cards in a row */
+}
+.channel-list.nm-full .channel-name {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: 1.32;
+  overflow-wrap: break-word;
+}
+
+/* ----- settings (profiles pane) ----- */
+.settings-card {
+  padding: 16px 18px;
+  border-radius: var(--r-md);
+}
+.setting-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.setting-name { font-size: 14px; font-weight: 600; }
+.setting-hint { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+
+.seg {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--glass-border);
+}
+.seg button {
+  flex: 1;
+  min-height: 34px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.seg button:active { transform: scale(0.96); }
+.seg button.active {
+  background: var(--grad);
+  color: #fff;
+}
+
 .channel-fav {
   position: absolute;
   top: 10px;

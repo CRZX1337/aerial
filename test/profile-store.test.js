@@ -59,3 +59,45 @@ test('deleting a profile clears its category favorites', () => {
   assert.deepEqual([...store.getCategoryFavorites('d1')], []);
   assert.deepEqual([...store.getFavorites('d1')], []);
 });
+
+// ------------------------------------------------------------- settings -----
+
+test('settings: defaults, persistence and key isolation', () => {
+  assert.equal(store.getSetting('nameMode', 'auto'), 'auto', 'unset key returns fallback');
+
+  store.setSetting('nameMode', 'two');
+  assert.equal(store.getSetting('nameMode', 'auto'), 'two', 'value survives a fresh read');
+
+  // other keys are untouched by one setting
+  store.setSetting('other', 1);
+  assert.equal(store.getSetting('nameMode', 'x'), 'two');
+  assert.equal(store.getSetting('other', 0), 1);
+
+  // overwrite works
+  store.setSetting('nameMode', 'full');
+  assert.equal(store.getSetting('nameMode', 'auto'), 'full');
+});
+
+test('settings: invalid values fall back, garbage storage tolerated', () => {
+  storage.set('aerial_settings', 'not json');
+  assert.equal(store.getSetting('nameMode', 'auto'), 'auto');
+
+  // writing over garbage recovers cleanly
+  store.setSetting('nameMode', 'one');
+  assert.equal(store.getSetting('nameMode', 'auto'), 'one');
+
+  storage.set('aerial_settings', '[1,2]');
+  assert.equal(store.getSetting('nameMode', 'auto'), 'auto', 'non-object storage reads as unset');
+
+  storage.set('aerial_settings', '{"nameMode":42}');
+  assert.equal(store.getSetting('nameMode', 'auto'), 42, 'values are returned as stored (validation lives in the UI layer)');
+});
+
+test('settings are device-level and do not interfere with profile data', () => {
+  store.setSetting('nameMode', 'two');
+  store.saveCategoryFavorites('s1', new Set(['cat']));
+  store.saveFavorites('s1', new Set(['chan']));
+  assert.deepEqual([...store.getCategoryFavorites('s1')], ['cat']);
+  assert.deepEqual([...store.getFavorites('s1')], ['chan']);
+  assert.equal(store.getSetting('nameMode', 'auto'), 'two');
+});
