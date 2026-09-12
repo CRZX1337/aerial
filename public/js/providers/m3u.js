@@ -155,8 +155,19 @@ export class M3UAdapter {
     if (this.catalog && this.catalog.inflight) return this.catalog.inflight;
     this.catalog = { ...this.catalog, inflight: null };
     const load = (async () => {
-      // 300s budget: big playlists are tens of MB and slow links need minutes.
-      const text = await this.fetchText(this.url, 300_000, 'Playlist');
+      // 300s budget + one retry: big playlists are tens of MB and slow or
+      // unstable links legitimately need minutes / a second chance.
+      const loadOnce = () => this.fetchText(this.url, 300_000, 'Playlist');
+      let text;
+      try {
+        text = await loadOnce();
+      } catch (err) {
+        if (err.code === 'timeout' || err.code === 'network_or_cors') {
+          text = await loadOnce(); // one retry
+        } else {
+          throw err;
+        }
+      }
       const data = parseM3U(text);
       if (!data.epgUrl && this.epgUrl) data.epgUrl = this.epgUrl;
       this.catalog = { at: this.now(), data, inflight: null };

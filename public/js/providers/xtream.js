@@ -11,6 +11,20 @@
 const CHANNEL_CACHE_MS = 60_000;
 const EPG_CACHE_MS = 30_000;
 
+/** Small fixed-concurrency pool — used for per-category catalog loading. */
+async function mapPool(total, limit, worker) {
+  const remaining = { count: total };
+  const lanes = Math.max(1, Math.min(limit, total));
+  const runners = Array.from({ length: lanes }, async () => {
+    while (remaining.count > 0) {
+      remaining.count -= 1;
+      const index = total - remaining.count - 1;
+      await worker(index);
+    }
+  });
+  await Promise.all(runners);
+}
+
 export class XtreamAdapter {
   constructor({ host, username, password, fetchImpl = fetch, now = () => Date.now() } = {}) {
     this.host = String(host || '').replace(/\/+$/, '');
@@ -19,6 +33,7 @@ export class XtreamAdapter {
     this.fetchImpl = fetchImpl;
     this.now = now;
     this.channelsCache = { data: null, at: 0, inflight: null };
+    this.categoriesCache = { data: null, at: 0, inflight: null };
     this.epgCache = new Map(); // streamId -> { data, at, inflight }
   }
 
@@ -126,61 +141,136 @@ export class XtreamAdapter {
     return holder.inflight;
   }
 
-  async getChannels() {
-    return this.singleFlight(this.channelsCache, CHANNEL_CACHE_MS, async () => {
-      // 300s budget + one retry: live-stream lists of big providers are
-      // 20+ MB, and slow international links legitimately need minutes.
-      // Mid-transfer resets are common on long downloads — a single retry
-      // rescues those.
-      const fetchStreams = async () => {
-        const url = this.playerApi('get_live_streams');
-        const load = () =>
-          this.fetchJson(url, 300_000, 'Senderliste').then((d) => (Array.isArray(d) ? d : []));
-        try {
-          return await load();
-        } catch (err) {
-          if (err.code === 'timeout' || err.code === 'network_or_cors') {
-            return await load(); // one retry
-          }
-          throw err;
-        }
-      };
-      const [categories, streams] = await Promise.all([
-        this.fetchJson(this.playerApi('get_live_categories'), 90_000, 'Kategorien').then((d) => (Array.isArray(d) ? d : [])),
-        fetchStreams(),
-      ]);
-      const catName = new Map();
-      for (const c of categories) {
-        if (c && c.category_id != null) catName.set(String(c.category_id), c.category_name);
-      }
-      // Some panels pad the stream list with "header" rows (e.g.
-      // "##### 4K UHD #####") that are not real channels — drop them.
-      const isHeaderRow = (name) =>
-        typeof name === 'string' &&
-        (/^#{3,}[\s\S]*#{3,}$/.test(name.trim()) || /^#{4,}/.test(name.trim()) || /^#+$/.test(name.trim()));
-      const channels = streams
-        .filter((s) => s && s.stream_id != null && (s.stream_type === 'live' || s.stream_type == null))
-        .filter((s) => !isHeaderRow(s.name))
-        .map((s, i) => ({
-          id: String(s.stream_id),
-          num: s.num || i + 1,
-          name: s.name || `Channel ${s.stream_id}`,
-          logo: s.stream_icon || '',
-          categoryId: s.category_id != null ? String(s.category_id) : '',
-          categoryName: catName.get(String(s.category_id)) || 'Uncategorized',
-          epgChannelId: s.epg_channel_id || '',
-          tvgId: s.epg_channel_id || '',
-        }));
-      const ordered = categories
+  /** Category list (small request, cached separately from the catalog). */
+  async getCategories() {
+    return this.singleFlight(this.categoriesCache, CHANNEL_CACHE_MS, async () => {
+      const data = await this.fetchJson(this.playerApi('get_live_categories'), 60_000, 'Kategorien');
+      return (Array.isArray(data) ? data : [])
         .filter((c) => c && c.category_id != null)
         .map((c) => ({ id: String(c.category_id), name: c.category_name }));
-      return { categories: ordered, channels };
     });
   }
 
-  async getCategories() {
-    const { categories } = await this.getChannels();
-    return categories;
+  /** Shared catalog mapping: header-row filter + per-id dedupe. */
+  buildCatalog(mappedCategories, streams) {
+    const catName = new Map();
+    for (const c of mappedCategories) catName.set(c.id, c.name);
+    // Some panels pad the stream list with "header" rows (e.g.
+    // "##### 4K UHD #####") that are not real channels — drop them.
+    const isHeaderRow = (name) =>
+      typeof name === 'string' &&
+      (/^#{3,}[\s\S]*#{3,}$/.test(name.trim()) || /^#{4,}/.test(name.trim()) || /^#+$/.test(name.trim()));
+    const seen = new Set();
+    const channels = [];
+    for (const s of streams) {
+      if (!s || s.stream_id == null) continue;
+      if (s.stream_type !== 'live' && s.stream_type != null) continue;
+      if (isHeaderRow(s.name)) continue;
+      const id = String(s.stream_id);
+      if (seen.has(id)) continue; // per-category results may overlap
+      seen.add(id);
+      channels.push({
+        id,
+        num: s.num || channels.length + 1,
+        name: s.name || `Channel ${s.stream_id}`,
+        logo: s.stream_icon || '',
+        categoryId: s.category_id != null ? String(s.category_id) : '',
+        categoryName: catName.get(String(s.category_id)) || 'Uncategorized',
+        epgChannelId: s.epg_channel_id || '',
+        tvgId: s.epg_channel_id || '',
+      });
+    }
+    return { categories: mappedCategories, channels };
+  }
+
+  /**
+   * Full channel list as ONE large transfer (20+ MB on big providers).
+   * Two attempts — mid-transfer resets are common on long downloads.
+   */
+  async fetchFullStreams() {
+    const url = this.playerApi('get_live_streams');
+    let lastErr = null;
+    for (const budgetMs of [120_000, 180_000]) {
+      try {
+        const data = await this.fetchJson(url, budgetMs, 'Senderliste');
+        return Array.isArray(data) ? data : [];
+      } catch (err) {
+        lastErr = err;
+        if (err.code !== 'timeout' && err.code !== 'network_or_cors') throw err;
+      }
+    }
+    throw lastErr;
+  }
+
+  /**
+   * Per-category fallback: instead of one huge transfer, fetch every
+   * category's streams separately (get_live_streams&category_id=X —
+   * ~20 KB each). Small requests survive unstable routes and flaky
+   * provider edges that repeatedly kill a 20 MB download. Each category
+   * gets two attempts; individual failures are tolerated and counted.
+   */
+  async fetchStreamsByCategory(categories, onProgress, isCancelled) {
+    const collected = [];
+    const total = categories.length;
+    const state = { done: 0, failed: 0, cancelled: false };
+    await mapPool(total, 6, async (index) => {
+      if (state.cancelled) return;
+      if (isCancelled && isCancelled()) {
+        state.cancelled = true;
+        return;
+      }
+      const cat = categories[index];
+      let streams = null;
+      for (let attempt = 0; attempt < 2 && streams === null; attempt++) {
+        try {
+          const data = await this.fetchJson(
+            this.playerApi('get_live_streams', { category_id: cat.id }),
+            30_000,
+            `Kategorie ${cat.name || cat.id}`,
+          );
+          streams = Array.isArray(data) ? data : [];
+        } catch {
+          streams = null; // retry once, then give up on this category
+        }
+      }
+      state.done += 1;
+      if (streams === null) state.failed += 1;
+      else collected.push(...streams);
+      if (onProgress) {
+        try {
+          onProgress(state.done, total, state.failed);
+        } catch { /* progress is best-effort */ }
+      }
+    });
+    return { streams: collected, failed: state.failed, cancelled: state.cancelled };
+  }
+
+  /**
+   * Catalog: categories + channel list. Resilient by design —
+   *  1. one big get_live_streams (two attempts)
+   *  2. if that keeps failing: per-category fallback (many small,
+   *     individually retried requests) with progress reporting
+   * Returns { categories, channels, partial, failedCategories }.
+   */
+  async getChannels(onProgress, isCancelled) {
+    return this.singleFlight(this.channelsCache, CHANNEL_CACHE_MS, async () => {
+      const categories = await this.getCategories();
+      let streams;
+      let partial = false;
+      let failedCategories = 0;
+      try {
+        streams = await this.fetchFullStreams();
+      } catch {
+        const fallback = await this.fetchStreamsByCategory(categories, onProgress, isCancelled);
+        streams = fallback.streams;
+        partial = true;
+        failedCategories = fallback.failed;
+      }
+      const catalog = this.buildCatalog(categories, streams);
+      catalog.partial = partial;
+      catalog.failedCategories = failedCategories;
+      return catalog;
+    });
   }
 
   /** Direct HLS playlist URL at the provider (native HLS & hls.js). */
@@ -213,6 +303,7 @@ export class XtreamAdapter {
 
   disconnect() {
     this.channelsCache = { data: null, at: 0, inflight: null };
+    this.categoriesCache = { data: null, at: 0, inflight: null };
     this.epgCache = new Map();
   }
 }

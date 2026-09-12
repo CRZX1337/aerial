@@ -1,7 +1,7 @@
-import { XtreamAdapter } from './js/providers/xtream.js?v=11';
-import { M3UAdapter } from './js/providers/m3u.js?v=11';
-import { fetchXmltv, parseXMLTV, shortEpg } from './js/providers/xmltv.js?v=11';
-import { diagnoseStages, httpsTwin } from './js/providers/netcheck.js?v=11';
+import { XtreamAdapter } from './js/providers/xtream.js?v=12';
+import { M3UAdapter } from './js/providers/m3u.js?v=12';
+import { fetchXmltv, parseXMLTV, shortEpg } from './js/providers/xmltv.js?v=12';
+import { diagnoseStages, httpsTwin } from './js/providers/netcheck.js?v=12';
 import {
   loadProfiles,
   upsertProfile,
@@ -16,7 +16,7 @@ import {
   saveFavorites,
   getRecent,
   pushRecent,
-} from './js/profiles.js?v=11';
+} from './js/profiles.js?v=12';
 
 (function () {
   'use strict';
@@ -458,12 +458,20 @@ import {
   }
 
   /**
-   * Attempt a full provider connection (authenticate + catalog) for one
-   * host. Returns the authenticated adapter, throws the provider error.
+   * Attempt a provider connection for one host. For Xtream this is the
+   * FAST check only (authenticate + categories — two small requests); the
+   * potentially huge channel list loads afterwards in connectProfile with
+   * its resilient per-category fallback. For M3U the playlist IS the
+   * authentication, so the catalog loads here.
+   * Returns the adapter, throws the provider error.
    */
   async function attemptConnect({ type, host, username, password, epgUrl }) {
     const { adapter } = createAdapter({ type, host, username, password, epgUrl });
-    if (type === 'xtream') await adapter.authenticate();
+    if (type === 'xtream') {
+      await adapter.authenticate();
+      await adapter.getCategories();
+      return adapter;
+    }
     const { channels } = await adapter.getChannels();
     if (!channels.length) {
       const err = new Error('Der Anbieter hat keine Sender geliefert.');
@@ -562,6 +570,17 @@ import {
         ' Bitte erneut versuchen und die App dabei geöffnet lassen.'
       );
     }
+    if (isNetworkFailure(err)) {
+      let detail = '';
+      if (diag && diag.throughputKBs && diag.throughputKBs >= 1) {
+        detail = ` Geschwindigkeit bei kleinen Anfragen: ~${Math.round(diag.throughputKBs)} KB/s.`;
+      }
+      return (
+        'Der Anbieter antwortet auf kleine Anfragen, aber die große Senderliste (20+ MB) wird auf dieser Verbindung wiederholt abgebrochen — auch der kategorie-weise Ladeversuch war nicht erfolgreich.' +
+        detail +
+        ' Lösungen: VPN oder ein anderes Netzwerk nutzen (andere Route zum Anbieter) und erneut versuchen.'
+      );
+    }
     return (
       'Die Verbindung funktioniert jetzt auf Anhieb — der erste Versuch war vermutlich eine kurze Schwankung. Bitte erneut versuchen.'
     );
@@ -586,13 +605,12 @@ import {
     }
 
     els.obSubmit.disabled = true;
-    els.obSubmit.querySelector('span').textContent = 'Verbinde … (große Senderlisten können etwas dauern)';
+    els.obSubmit.querySelector('span').textContent = 'Verbinde …';
     els.onboardError.textContent = '';
     try {
       const { adapter, host: connectedHost, upgraded } = await connectWithDiagnosis({
         type: onboardType, host, username, password, epgUrl,
       });
-      const { channels: loaded } = await adapter.getChannels();
 
       const profile = upsertProfile({
         id: newProfileId(),
@@ -607,13 +625,15 @@ import {
       if (onboardType === 'xtream' && remember) setRememberedSecret(profile.id, password);
 
       showMainShell();
+      // The channel list loads inside connectProfile — for Xtream with the
+      // resilient per-category fallback, visible as progress in the list.
       await connectProfile(profile.id, {
         secret: onboardType === 'xtream' ? password : null,
-        adapter, // reuse the probed catalog — no double fetch
+        adapter, // reuse the probed adapter — auth/categories stay cached
       });
       toast(upgraded
-        ? `Verbunden über HTTPS · ${loaded.length} Sender`
-        : `${profile.name} verbunden · ${loaded.length} Sender`);
+        ? 'Verbunden über HTTPS — Senderliste wird geladen'
+        : `${profile.name} verbunden — Senderliste wird geladen`);
     } catch (err) {
       if (err && !err.providerUrl) err.providerUrl = host;
       renderProviderError(els.onboardError, err);
@@ -736,13 +756,33 @@ import {
     renderProfileList();
 
     try {
-      const { channels: list, categories: cats } = await adapter.getChannels();
+      // Resilient catalog load: one big transfer first, per-category
+      // fallback with live progress when the route keeps killing it.
+      const catalog = await adapter.getChannels(
+        (done, total, failed) => updateListProgress(done, total, failed),
+        () => token !== connectToken, // stop loading when a newer connect won
+      );
       if (token !== connectToken) return; // stale — a newer connect won
-      channels = list;
-      categories = cats;
-      listVersion += 1; // catalog changed — force a fresh windowed render
-      catalogError = null;
-      els.connDot.className = 'conn-dot on';
+
+      if (!catalog.channels.length) {
+        catalogError = 'Der Anbieter hat keine Sender geliefert (auch der kategorie-weise Ladeversuch brachte keine Sender).';
+        els.connDot.className = 'conn-dot off';
+      } else {
+        channels = catalog.channels;
+        categories = catalog.categories;
+        listVersion += 1; // catalog changed — force a fresh windowed render
+        catalogError = null;
+        els.connDot.className = 'conn-dot on';
+        if (catalog.partial) {
+          toast(
+            catalog.failedCategories > 0
+              ? `Senderliste teilweise geladen — ${catalog.failedCategories} Kategorien konnten nicht geladen werden.`
+              : 'Senderliste kategorie-weise geladen.',
+            'warn',
+            6000,
+          );
+        }
+      }
     } catch (err) {
       if (token !== connectToken) return;
 
@@ -759,11 +799,15 @@ import {
               password: memorySecret,
               epgUrl: profile.epgUrl,
             }).adapter;
-            const { channels: list, categories: cats } = await upgradedAdapter.getChannels();
+            const catalog = await upgradedAdapter.getChannels(
+              (done, total, failed) => updateListProgress(done, total, failed),
+              () => token !== connectToken,
+            );
             if (token !== connectToken) return;
+            if (!catalog.channels.length) throw new Error('Der Anbieter hat keine Sender geliefert.');
             adapter = upgradedAdapter;
-            channels = list;
-            categories = cats;
+            channels = catalog.channels;
+            categories = catalog.categories;
             listVersion += 1;
             catalogError = null;
             els.connDot.className = 'conn-dot on';
@@ -773,7 +817,7 @@ import {
             renderProfileList();
             return;
           } catch (upgradeErr) {
-            if (!isNetworkFailure(upgradeErr)) {
+            if (!isNetworkFailure(upgradeErr) && !isTimeoutFailure(upgradeErr)) {
               // https answered with a real provider error — report that.
               if (token !== connectToken) return;
               if (!upgradeErr.providerUrl) upgradeErr.providerUrl = twin;
@@ -1302,6 +1346,11 @@ import {
 
   function renderSkeletons() {
     els.channelList.innerHTML = '';
+    const prog = document.createElement('div');
+    prog.className = 'list-progress';
+    prog.id = 'list-progress';
+    prog.textContent = 'Senderliste wird geladen …';
+    els.channelList.appendChild(prog);
     for (let i = 0; i < 6; i++) {
       const sk = document.createElement('div');
       sk.className = 'skeleton';
@@ -1309,6 +1358,15 @@ import {
         '<div class="sk-logo"></div><div class="sk-line"></div><div class="sk-line short"></div>';
       els.channelList.appendChild(sk);
     }
+  }
+
+  /** Live progress for the per-category catalog fallback. */
+  function updateListProgress(done, total, failed) {
+    const el = document.getElementById('list-progress');
+    if (!el) return;
+    el.textContent =
+      `Senderliste lädt kategorie-weise … ${done}/${total} Kategorien` +
+      (failed > 0 ? ` (${failed} fehlgeschlagen)` : '');
   }
 
   // -------------------------------------------------------------- playback --

@@ -794,6 +794,16 @@ input, [contenteditable="true"], .guide-item-desc {
   min-height: 2px;
 }
 
+/* Live progress line while the catalog loads (per-category fallback) */
+.list-progress {
+  grid-column: 1 / -1;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--text-3);
+  padding: 2px 0 4px;
+  min-height: 18px;
+}
+
 .channel-card {
   position: relative;
   display: flex;

@@ -250,7 +250,8 @@ test('XtreamAdapter: catalog download retries once on timeout/network failure', 
   let streamsCalls = 0;
   const realFetch = fetch;
   const fetchImpl = async (url, opts) => {
-    if (String(url).includes('action=get_live_streams')) {
+    const u = new URL(String(url));
+    if (u.searchParams.get('action') === 'get_live_streams' && !u.searchParams.get('category_id')) {
       streamsCalls += 1;
       if (streamsCalls === 1) {
         // first attempt: mid-transfer reset (TypeError like browsers report)
@@ -263,50 +264,127 @@ test('XtreamAdapter: catalog download retries once on timeout/network failure', 
   const adapter = new XtreamAdapter({ host, username: 'user', password: 'pass', fetchImpl });
   try {
     await adapter.authenticate();
-    const { channels } = await adapter.getChannels();
-    assert.equal(channels.length, 3); // retry rescued the catalog
+    const catalog = await adapter.getChannels();
+    assert.equal(catalog.channels.length, 3); // retry rescued the catalog
+    assert.equal(catalog.partial, false); // fallback never ran
     assert.equal(streamsCalls, 2, 'exactly one retry');
   } finally {
     mock.server.close();
   }
 });
 
-test('XtreamAdapter: catalog retry gives up after the second failure', async () => {
-  const mock = makeXtreamMock();
-  await new Promise((r) => mock.server.listen(0, '127.0.0.1', r));
-  const host = `http://127.0.0.1:${mock.server.address().port}`;
+const jsonResponse = (data) =>
+  new Response(JSON.stringify(data), { headers: { 'content-type': 'application/json' } });
 
+test('XtreamAdapter: full-list failure falls back to per-category loading', async () => {
+  const cats = [
+    { category_id: '1', category_name: 'A' },
+    { category_id: '2', category_name: 'B' },
+  ];
+  const byCat = {
+    '1': [
+      { stream_id: 10, name: 'Chan A', category_id: '1', stream_type: 'live' },
+      { stream_id: 11, name: 'Chan B', category_id: '1', stream_type: 'live' },
+    ],
+    '2': [
+      // stream 10 delivered by two categories -> must be deduped
+      { stream_id: 10, name: 'Chan A', category_id: '2', stream_type: 'live' },
+      { stream_id: 12, name: 'Chan C', category_id: '2', stream_type: 'live' },
+    ],
+  };
+  const fetchImpl = async (url) => {
+    const u = new URL(String(url));
+    const action = u.searchParams.get('action');
+    if (action === 'get_live_categories') return jsonResponse(cats);
+    if (action === 'get_live_streams') {
+      const cat = u.searchParams.get('category_id');
+      if (!cat) throw new TypeError('Failed to fetch'); // the big transfer always dies
+      return jsonResponse(byCat[cat] || []);
+    }
+    return jsonResponse({ user_info: { auth: 1 } });
+  };
+
+  const adapter = new XtreamAdapter({ host: 'http://p.example', username: 'u', password: 'p', fetchImpl });
+  const progress = [];
+  const catalog = await adapter.getChannels((done, total, failed) => progress.push([done, total, failed]));
+
+  assert.equal(catalog.partial, true);
+  assert.equal(catalog.failedCategories, 0);
+  assert.equal(catalog.channels.length, 3, 'duplicate stream ids deduped');
+  assert.deepEqual(catalog.channels.map((c) => c.id).sort(), ['10', '11', '12']);
+  assert.equal(catalog.categories.length, 2);
+  assert.deepEqual(progress[progress.length - 1], [2, 2, 0], 'progress reached the end');
+});
+
+test('XtreamAdapter: failed categories are tolerated and counted', async () => {
+  const cats = [
+    { category_id: '1', category_name: 'A' },
+    { category_id: '2', category_name: 'B' },
+    { category_id: '3', category_name: 'C' },
+  ];
+  const fetchImpl = async (url) => {
+    const u = new URL(String(url));
+    const action = u.searchParams.get('action');
+    if (action === 'get_live_categories') return jsonResponse(cats);
+    if (action === 'get_live_streams') {
+      const cat = u.searchParams.get('category_id');
+      if (!cat) throw new TypeError('Failed to fetch'); // full list dies
+      if (cat === '2') throw new TypeError('Failed to fetch'); // this category always dies, too
+      return jsonResponse([{ stream_id: cat === '1' ? 10 : 12, name: 'C', category_id: cat, stream_type: 'live' }]);
+    }
+    return jsonResponse({ user_info: { auth: 1 } });
+  };
+
+  const adapter = new XtreamAdapter({ host: 'http://p.example', username: 'u', password: 'p', fetchImpl });
+  const catalog = await adapter.getChannels();
+  assert.equal(catalog.partial, true);
+  assert.equal(catalog.failedCategories, 1);
+  assert.deepEqual(catalog.channels.map((c) => c.id).sort(), ['10', '12']);
+});
+
+test('XtreamAdapter: per-category fallback stops when cancelled', async () => {
+  let categoryCalls = 0;
+  const fetchImpl = async (url) => {
+    const u = new URL(String(url));
+    const action = u.searchParams.get('action');
+    if (action === 'get_live_categories') {
+      return jsonResponse([{ category_id: '1', category_name: 'A' }]);
+    }
+    if (action === 'get_live_streams') {
+      if (!u.searchParams.get('category_id')) throw new TypeError('Failed to fetch');
+      categoryCalls += 1;
+      return jsonResponse([{ stream_id: categoryCalls, name: 'C', category_id: '1', stream_type: 'live' }]);
+    }
+    return jsonResponse({ user_info: { auth: 1 } });
+  };
+
+  const adapter = new XtreamAdapter({ host: 'http://p.example', username: 'u', password: 'p', fetchImpl });
+  const catalog = await adapter.getChannels(undefined, () => true); // cancelled from the start
+  assert.equal(catalog.partial, true);
+  assert.equal(categoryCalls, 0, 'no category request after cancellation');
+  assert.equal(catalog.channels.length, 0);
+});
+
+test('XtreamAdapter: everything failing resolves to an empty partial catalog (no throw)', async () => {
   let streamsCalls = 0;
   const fetchImpl = async (url) => {
-    if (String(url).includes('action=get_live_streams')) {
-      streamsCalls += 1;
-      throw new TypeError('Failed to fetch');
-    }
-    return realFetchImplMock(host)(url);
-  };
-  // simple local mock for non-streams endpoints
-  const realFetchImplMock = (h) => async (url) => {
     const u = new URL(String(url));
-    if (u.searchParams.get('action') === 'get_live_categories') {
-      return new Response(JSON.stringify([{ category_id: '1', category_name: 'News' }]), {
-        headers: { 'content-type': 'application/json' },
-      });
+    if (u.searchParams.get('action') === 'get_live_streams') {
+      streamsCalls += 1;
+      throw new TypeError('Failed to fetch'); // full AND per-category all fail
     }
-    return new Response(JSON.stringify({ user_info: { auth: 1 } }), {
-      headers: { 'content-type': 'application/json' },
-    });
+    if (u.searchParams.get('action') === 'get_live_categories') {
+      return jsonResponse([{ category_id: '1', category_name: 'News' }]);
+    }
+    return jsonResponse({ user_info: { auth: 1 } });
   };
 
-  const adapter = new XtreamAdapter({ host, username: 'user', password: 'pass', fetchImpl });
-  try {
-    await assert.rejects(
-      () => adapter.getChannels(),
-      (e) => e.code === 'network_or_cors' && e.stage === 'Senderliste',
-    );
-    assert.equal(streamsCalls, 2, 'one retry, then the error surfaces');
-  } finally {
-    mock.server.close();
-  }
+  const adapter = new XtreamAdapter({ host: 'http://p.example', username: 'u', password: 'p', fetchImpl });
+  const catalog = await adapter.getChannels();
+  assert.equal(catalog.channels.length, 0);
+  assert.equal(catalog.partial, true);
+  assert.equal(catalog.failedCategories, 1);
+  assert.equal(streamsCalls, 4, '2 full attempts + 2 category attempts');
 });
 
 test('XtreamAdapter: credentials are URL-encoded in stream URLs', () => {

@@ -118,7 +118,7 @@ test('index.html has complete iOS/PWA metadata and the player app shell', () => 
   assert.doesNotMatch(html, /<script(?![^>]*src=)[^>]*>/);
 
   // App entry is an ES module (cache-busted)
-  assert.match(html, /<script type="module" src="\/app\.js\?v=11">/);
+  assert.match(html, /<script type="module" src="\/app\.js\?v=12">/);
   // Branding: Aerial
   assert.match(html, /<title>Aerial<\/title>/);
 });
@@ -212,32 +212,41 @@ test('app.js implements autoplay + recovery + lifecycle without silent errors', 
   // Category chips are signature-guarded too (900+ categories)
   assert.match(js, /categoriesSignature/);
 
-  // Onboarding hands the probed adapter to connectProfile (no double fetch)
-  assert.match(js, /adapter, \/\/ reuse the probed catalog/);
+  // Onboarding hands the probed adapter to connectProfile (auth/categories
+  // stay cached; the catalog loads once inside connectProfile)
+  assert.match(js, /adapter, \/\/ reuse the probed adapter/);
 
   // Connection diagnostics: https auto-upgrade + staged failure analysis
-  assert.match(js, /import \{ diagnoseStages, httpsTwin \} from '\.\/js\/providers\/netcheck\.js\?v=11'/);
+  assert.match(js, /import \{ diagnoseStages, httpsTwin \} from '\.\/js\/providers\/netcheck\.js\?v=12'/);
   assert.match(js, /function connectWithDiagnosis\(/);
   assert.match(js, /const twin = httpsTwin\(host\)/);
   assert.match(js, /diagnosisMessage/); // precise cause overrides generic message
   assert.match(js, /Verbunden über HTTPS/); // user feedback on upgrade
   assert.match(js, /attemptConnect\(/); // single shared connect sequence
+  assert.match(js, /await adapter\.getCategories\(\);/); // fast xtream probe: no catalog in the wizard
   // Timeouts are their own error class (slow link != network/CORS problem)
   assert.match(js, /function isTimeoutFailure\(err\)/);
   assert.match(js, /isNetworkFailure\(firstErr\)/); // https twin only for real network failures
   assert.match(js, /diagnoseStages\(stages\)/); // staged re-run: Anmeldung -> Kategorien -> Senderliste
   assert.match(js, /renderProviderError/); // error output incl. self-test link
   assert.match(js, /testUrl/); // clickable provider self-test URL
-  // Adapter fetches are bounded (no infinite spinners on hung connections)
-  assert.match(fs.readFileSync(path.join(PUBLIC, 'js', 'providers', 'xtream.js'), 'utf8'), /AbortSignal\.timeout/);
-  assert.match(fs.readFileSync(path.join(PUBLIC, 'js', 'providers', 'm3u.js'), 'utf8'), /AbortSignal\.timeout/);
-  // ... with a generous catalog budget (20+ MB lists on slow links)
+  // Resilient catalog loading: big transfer first, per-category fallback
   const xtreamSrc = fs.readFileSync(path.join(PUBLIC, 'js', 'providers', 'xtream.js'), 'utf8');
-  assert.match(xtreamSrc, /300_000, 'Senderliste'/);
+  assert.match(xtreamSrc, /AbortSignal\.timeout/); // bounded requests
+  assert.match(xtreamSrc, /fetchFullStreams\(\)/);
+  assert.match(xtreamSrc, /\[120_000, 180_000\]/); // two attempts for the 20+ MB list
+  assert.match(xtreamSrc, /fetchStreamsByCategory\(/); // many small requests survive resets
+  assert.match(xtreamSrc, /category_id: cat\.id/);
+  assert.match(xtreamSrc, /catalog\.partial = partial/);
+  assert.match(xtreamSrc, /catalog\.failedCategories = failedCategories/);
   assert.match(xtreamSrc, /stageUrls\(\)/);
-  // ... and one automatic retry for interrupted catalog downloads
-  assert.match(xtreamSrc, /one retry/);
   assert.match(xtreamSrc, /probeBytes: 262_144/); // throughput measurement stage
+  assert.match(fs.readFileSync(path.join(PUBLIC, 'js', 'providers', 'm3u.js'), 'utf8'), /one retry/);
+  // Live progress + cancellation for the fallback in the app
+  assert.match(js, /updateListProgress/);
+  assert.match(js, /kategorie-weise/);
+  assert.match(js, /list-progress/);
+  assert.match(js, /Senderliste teilweise geladen/); // partial-catalog warning
   // "ok" diagnosis differentiates timeouts (slow link) from true transients
   assert.match(js, /function okDiagnosisMessage\(err, diag\)/);
   assert.match(js, /throughputKBs/);
@@ -248,7 +257,7 @@ test('provider modules implement the adapter interface cleanly', () => {
   const xtream = fs.readFileSync(path.join(PUBLIC, 'js', 'providers', 'xtream.js'), 'utf8');
   for (const m of [
     'async authenticate()',
-    'async getChannels()',
+    'async getChannels(onProgress, isCancelled)',
     'async getCategories()',
     'getStreamUrl(',
     'async getEPG(',

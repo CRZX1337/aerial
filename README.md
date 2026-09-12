@@ -89,16 +89,19 @@ messages** instead of silent failures. There is deliberately **no** CORS
 bypass, `no-cors` hack, or hidden relay — a provider that refuses browser
 connections simply cannot be used from the browser.
 
-### Automatic connection diagnostics
+### Automatic connection diagnostics & resilient catalogs
 
 When a connection fails, Aerial does not just say "network error":
 
-1. **Generous transfer budgets:** catalog downloads (channel lists can be
-   20+ MB) get a 5-minute budget **plus one automatic retry** for
-   interrupted transfers — slow international links are a normal
-   situation, not an error. Auth/EPG requests use 15 seconds. Timeouts are
-   reported as timeouts ("Verbindung zu langsam"), never as network/CORS
-   failures.
+1. **Fast connect, resilient catalog:** the connect wizard only checks
+   credentials + categories (two small requests, seconds). The channel
+   list loads afterwards with visible progress — first as one big
+   transfer (two attempts, 2–3 minute budgets), and when the route keeps
+   killing that 20+ MB download, automatically **category by category**:
+   hundreds of small ~20 KB requests that survive unstable routes and
+   flaky provider edges. Failed categories are tolerated and reported
+   ("Senderliste teilweise geladen"), progress is shown live
+   ("lädt kategorie-weise … 400/916 Kategorien").
 2. **HTTPS auto-upgrade:** if the entered provider URL is `http://` and the
    connection fails at the transport level, the `https://` twin is tried
    automatically. Many Cloudflare-fronted providers serve the same API over
@@ -121,8 +124,10 @@ When a connection fails, Aerial does not just say "network error":
 - App served over **https://** and provider URL is **http://** → use the
   provider's **https** URL (the browser blocks mixed content, no app can
   change that)
-- "Zeitüberschreitung bei „Senderliste"" → the catalog is too big for your
-  current link: use stable Wi-Fi, try a VPN (different routing), retry
+- "Zeitüberschreitung bei „Senderliste"" or partial catalog warnings →
+  your route to the provider is slow/unstable for big transfers; Aerial
+  automatically retries category-by-category — keep the app open, use
+  stable Wi-Fi, or try a VPN (different routing)
 - Provider works in a native IPTV app but not in Aerial → that app has no
   CORS rules; disable adblocker extensions for the app, try the self-test
   link from the error message, or a different network
