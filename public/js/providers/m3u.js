@@ -85,29 +85,52 @@ export class M3UAdapter {
     this.catalog = null; // { at, data, inflight }
   }
 
-  async fetchText(url) {
+  async fetchText(url, timeoutMs = 90_000, stage = 'Playlist') {
     // Bounded request (AbortSignal.timeout: modern browsers; older skip).
+    // Playlists can be tens of MB — generous default budget.
     const signal =
       typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
-        ? AbortSignal.timeout(12_000)
+        ? AbortSignal.timeout(timeoutMs)
         : undefined;
-    const res = await this.fetchImpl(url, {
-      headers: { accept: 'audio/x-mpegurl, application/vnd.apple.mpegurl, text/plain, */*' },
-      signal,
-    });
+    let res;
+    try {
+      res = await this.fetchImpl(url, {
+        headers: { accept: 'audio/x-mpegurl, application/vnd.apple.mpegurl, text/plain, */*' },
+        signal,
+      });
+    } catch (err) {
+      if (err && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
+        const e = new Error(`Zeitüberschreitung bei „${stage}"`);
+        e.code = 'timeout';
+        e.stage = stage;
+        throw e;
+      }
+      const e = new Error('Provider unreachable (network or CORS)');
+      e.code = 'network_or_cors';
+      e.stage = stage;
+      e.cause = err;
+      throw e;
+    }
     if (!res.ok) {
       const err = new Error(`Playlist request failed (HTTP ${res.status})`);
       err.code = 'http_error';
       err.status = res.status;
+      err.stage = stage;
       throw err;
     }
     const text = await res.text();
     if (!/^\uFEFF?#EXTM3U/i.test(text.trim())) {
       const err = new Error('URL did not return an M3U/M3U8 playlist');
       err.code = 'invalid_playlist';
+      err.stage = stage;
       throw err;
     }
     return text;
+  }
+
+  /** Real request URLs for staged connection diagnostics. */
+  stageUrls() {
+    return [{ label: 'Playlist', url: this.url, timeoutMs: 30_000 }];
   }
 
   async authenticate() {

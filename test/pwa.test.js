@@ -118,7 +118,7 @@ test('index.html has complete iOS/PWA metadata and the player app shell', () => 
   assert.doesNotMatch(html, /<script(?![^>]*src=)[^>]*>/);
 
   // App entry is an ES module (cache-busted)
-  assert.match(html, /<script type="module" src="\/app\.js\?v=9">/);
+  assert.match(html, /<script type="module" src="\/app\.js\?v=10">/);
   // Branding: Aerial
   assert.match(html, /<title>Aerial<\/title>/);
 });
@@ -215,16 +215,26 @@ test('app.js implements autoplay + recovery + lifecycle without silent errors', 
   // Onboarding hands the probed adapter to connectProfile (no double fetch)
   assert.match(js, /adapter, \/\/ reuse the probed catalog/);
 
-  // Connection diagnostics: https auto-upgrade + precise failure causes
-  assert.match(js, /import \{ diagnoseFailure, httpsTwin \} from '\.\/js\/providers\/netcheck\.js\?v=9'/);
+  // Connection diagnostics: https auto-upgrade + staged failure analysis
+  assert.match(js, /import \{ diagnoseStages, httpsTwin \} from '\.\/js\/providers\/netcheck\.js\?v=10'/);
   assert.match(js, /function connectWithDiagnosis\(/);
   assert.match(js, /const twin = httpsTwin\(host\)/);
   assert.match(js, /diagnosisMessage/); // precise cause overrides generic message
   assert.match(js, /Verbunden über HTTPS/); // user feedback on upgrade
   assert.match(js, /attemptConnect\(/); // single shared connect sequence
+  // Timeouts are their own error class (slow link != network/CORS problem)
+  assert.match(js, /function isTimeoutFailure\(err\)/);
+  assert.match(js, /isNetworkFailure\(firstErr\)/); // https twin only for real network failures
+  assert.match(js, /diagnoseStages\(stages\)/); // staged re-run: Anmeldung -> Kategorien -> Senderliste
+  assert.match(js, /renderProviderError/); // error output incl. self-test link
+  assert.match(js, /testUrl/); // clickable provider self-test URL
   // Adapter fetches are bounded (no infinite spinners on hung connections)
   assert.match(fs.readFileSync(path.join(PUBLIC, 'js', 'providers', 'xtream.js'), 'utf8'), /AbortSignal\.timeout/);
   assert.match(fs.readFileSync(path.join(PUBLIC, 'js', 'providers', 'm3u.js'), 'utf8'), /AbortSignal\.timeout/);
+  // ... with a generous catalog budget (20+ MB lists on slow links)
+  const xtreamSrc = fs.readFileSync(path.join(PUBLIC, 'js', 'providers', 'xtream.js'), 'utf8');
+  assert.match(xtreamSrc, /90_000, 'Senderliste'/);
+  assert.match(xtreamSrc, /stageUrls\(\)/);
 });
 
 test('provider modules implement the adapter interface cleanly', () => {

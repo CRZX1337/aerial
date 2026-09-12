@@ -110,3 +110,98 @@ export async function diagnoseFailure(providerUrl, { fetchImpl = fetch } = {}) {
     return result;
   }
 }
+
+function isTimeoutError(err) {
+  return Boolean(err) && (err.name === 'AbortError' || err.name === 'TimeoutError');
+}
+
+/**
+ * Stage-by-stage diagnosis: runs the provider's real request sequence
+ * (auth -> categories -> channel list) and identifies WHICH step fails and
+ * why. This distinguishes:
+ *  - provider HTTP errors (status readable, CORS headers present)
+ *  - timeouts on large transfers (slow/unstable connection)
+ *  - blocked/challenged browser requests (Cloudflare/WAF: reachable via
+ *    no-cors but the CORS read fails)
+ *  - genuine network blocks (DNS/firewall/adblocker)
+ *
+ * stages: [{ label, url, timeoutMs? }] — returns
+ * { kind, stageLabel, message, testUrl? } and never throws.
+ * kind 'ok' means every stage passed NOW (the original failure was
+ * transient — worth retrying).
+ */
+export async function diagnoseStages(stages, { fetchImpl = fetch } = {}) {
+  const fail = (kind, stageLabel, message, testUrl) => ({ kind, stageLabel, message, testUrl });
+  try {
+    if (!Array.isArray(stages) || !stages.length) {
+      return fail('unknown', '', 'Die Verbindung konnte nicht aufgebaut werden.');
+    }
+    if (isMixedContent(stages[0].url)) {
+      return fail(
+        'mixed_content',
+        stages[0].label,
+        'Der Browser blockiert die Verbindung: Die App läuft über HTTPS, der Anbieter aber über HTTP (Mixed Content). ' +
+          'Lösung: den Anbieter mit einer HTTPS-URL eintragen (https://…).',
+      );
+    }
+
+    for (const stage of stages) {
+      try {
+        const res = await probeCors(stage.url, { fetchImpl, timeoutMs: stage.timeoutMs });
+        if (!res.ok) {
+          return fail(
+            'http_error',
+            stage.label,
+            `Der Anbieter hat bei „${stage.label}" mit HTTP ${res.status} geantwortet. ` +
+              'Zugangsdaten bzw. Anbieter-Status prüfen.',
+            stage.url,
+          );
+        }
+        // stage OK — release the body without downloading it (catalogs can
+        // be 20 MB; diagnosis only needs the status + CORS headers).
+        try {
+          if (res.body && typeof res.body.cancel === 'function') res.body.cancel().catch(() => {});
+        } catch { /* already drained */ }
+      } catch (err) {
+        if (isTimeoutError(err)) {
+          return fail(
+            'timeout',
+            stage.label,
+            `„${stage.label}" wurde abgebrochen — die Verbindung ist zu langsam oder instabil (bei riesigen Senderlisten können über 20 MB übertragen werden). ` +
+              'Lösungen: stabiles WLAN verwenden, VPN testen und danach erneut verbinden.',
+            stage.url,
+          );
+        }
+        // Network-level vs blocked/challenged: probe the SAME url opaque.
+        let reachable = false;
+        try {
+          await probeReachable(stage.url, { fetchImpl });
+          reachable = true;
+        } catch {
+          reachable = false;
+        }
+        if (!reachable) {
+          return fail(
+            'network_blocked',
+            stage.label,
+            'Der Anbieter ist von diesem Gerät/Netz aus nicht erreichbar (DNS, Firewall, Werbeblocker oder Anbieter offline). ' +
+              'Lösungen: Werbeblocker/Privacy-Erweiterung für diese App deaktivieren, VPN ein-/ausschalten, ' +
+              'anderes Netzwerk testen (z. B. Mobilfunk statt WLAN).',
+          );
+        }
+        return fail(
+          'blocked_or_cors',
+          stage.label,
+            `Der Anbieter hat die Browser-Anfrage bei „${stage.label}" blockiert (z. B. Cloudflare-/Sicherheitsfilter) oder erlaubt keine Browser-Verbindung (CORS). ` +
+            'Zum Selbst-Test die Anbieter-Adresse unten direkt im Browser öffnen: Erscheinen dort Daten, ist es ein App-Problem (bitte melden). ' +
+            'Erscheint eine Prüf-/Blockseite, blockiert der Anbieter dein Gerät oder Netzwerk (z. B. wegen VPN, Adblocker oder IP-Filter) — ' +
+            'anderes Netzwerk/VPN testen oder den Anbieter kontaktieren.',
+          stage.url,
+        );
+      }
+    }
+    return { kind: 'ok', stageLabel: '', message: '' };
+  } catch {
+    return fail('unknown', '', 'Die Verbindung konnte nicht aufgebaut werden.');
+  }
+}

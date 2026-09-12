@@ -93,25 +93,34 @@ connections simply cannot be used from the browser.
 
 When a connection fails, Aerial does not just say "network error":
 
-1. **HTTPS auto-upgrade:** if the entered provider URL is `http://` and the
+1. **Generous transfer budgets:** catalog downloads (channel lists can be
+   20+ MB) get a 90-second budget — slow international links are a normal
+   situation, not an error. Auth/EPG requests use 15 seconds. Timeouts are
+   reported as timeouts ("Verbindung zu langsam"), never as network/CORS
+   failures.
+2. **HTTPS auto-upgrade:** if the entered provider URL is `http://` and the
    connection fails at the transport level, the `https://` twin is tried
    automatically. Many Cloudflare-fronted providers serve the same API over
    both — and `https` survives HTTPS deployments and stricter networks.
    The upgraded URL is stored in the profile.
-2. **Precise cause analysis:** if both transports fail, targeted probes
-   distinguish the actual cause on *your* device — mixed content
-   (HTTPS app + HTTP provider), network-level blocks (DNS filter, firewall,
-   adblocker extension, ISP) or a genuine CORS refusal — and show the
-   matching fix.
+3. **Staged diagnosis:** if everything fails, Aerial re-runs the provider's
+   real request sequence (login → categories → channel list) and pinpoints
+   the failing step and its actual cause on *your* device — mixed content,
+   a timeout on a slow link, network-level blocks (DNS filter, firewall,
+   adblocker extension), or a provider/WAF that blocks browsers — and shows
+   the matching fix plus a **clickable self-test link** that opens the
+   provider's real API URL in a new tab (data = report an app bug;
+   block/challenge page = the provider or your network blocks the request).
 
 **Troubleshooting a failed connection:**
 - App served over **https://** and provider URL is **http://** → use the
   provider's **https** URL (the browser blocks mixed content, no app can
   change that)
+- "Zeitüberschreitung bei „Senderliste"" → the catalog is too big for your
+  current link: use stable Wi-Fi, try a VPN (different routing), retry
 - Provider works in a native IPTV app but not in Aerial → that app has no
-  CORS rules; check whether the provider sends
-  `Access-Control-Allow-Origin` (many Xtream panels do), disable adblocker
-  extensions for the app, or try a different network
+  CORS rules; disable adblocker extensions for the app, try the self-test
+  link from the error message, or a different network
 - Provider serves both `http://` and `https://` → prefer `https://`
 
 ## ⚙️ Configuration (`.env`)

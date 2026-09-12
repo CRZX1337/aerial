@@ -211,6 +211,34 @@ test('XtreamAdapter: unreachable provider is classified as network_or_cors', asy
   await assert.rejects(() => adapter.authenticate(), (e) => e.code === 'network_or_cors');
 });
 
+test('XtreamAdapter: slow links are classified as timeout, not network/CORS', async () => {
+  const fetchImpl = async () => {
+    const e = new Error('The operation was aborted due to timeout');
+    e.name = 'TimeoutError';
+    throw e;
+  };
+  const adapter = new XtreamAdapter({ host: 'http://p.example', username: 'u', password: 'p', fetchImpl });
+  await assert.rejects(
+    () => adapter.authenticate(),
+    (e) => e.code === 'timeout' && e.stage === 'Anmeldung' && /Zeitüberschreitung/.test(e.message),
+  );
+  await assert.rejects(
+    () => adapter.getChannels(),
+    (e) => e.code === 'timeout' && (e.stage === 'Kategorien' || e.stage === 'Senderliste'),
+  );
+});
+
+test('XtreamAdapter: stageUrls exposes the real request sequence for diagnostics', () => {
+  const adapter = new XtreamAdapter({ host: 'http://p.example', username: 'u', password: 'p' });
+  const stages = adapter.stageUrls();
+  assert.equal(stages.length, 3);
+  assert.deepEqual(stages.map((s) => s.label), ['Anmeldung', 'Kategorien', 'Senderliste']);
+  assert.ok(stages[0].url.includes('player_api.php'));
+  assert.ok(!stages[0].url.includes('action='));
+  assert.ok(stages[2].url.includes('action=get_live_streams'));
+  assert.ok(stages.every((s) => typeof s.timeoutMs === 'number'));
+});
+
 test('XtreamAdapter: credentials are URL-encoded in stream URLs', () => {
   const adapter = new XtreamAdapter({ host: 'http://p:8080', username: 'u ser/x', password: 'pä:s?' });
   assert.equal(

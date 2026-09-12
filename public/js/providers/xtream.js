@@ -37,20 +37,29 @@ export class XtreamAdapter {
     return u.toString();
   }
 
-  async fetchJson(url) {
-    // Bounded request: hung TCP connections must surface as an error
-    // instead of spinning forever (AbortSignal.timeout: Safari 16+,
-    // Chrome 103+, Firefox 100+ — older browsers simply skip the limit).
+  async fetchJson(url, timeoutMs = 15_000, stage = '') {
+    // Bounded request: hung/slow connections must surface as a typed error
+    // instead of spinning forever. Catalog requests pass a much larger
+    // budget (20+ MB lists are legitimate). AbortSignal.timeout: Safari
+    // 16+, Chrome 103+, Firefox 100+ — older browsers simply skip the limit.
     const signal =
       typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
-        ? AbortSignal.timeout(12_000)
+        ? AbortSignal.timeout(timeoutMs)
         : undefined;
     let res;
     try {
       res = await this.fetchImpl(url, { headers: { accept: 'application/json' }, signal });
     } catch (err) {
+      if (err && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
+        // Slow link (huge catalog on mobile) — NOT a network/CORS problem.
+        const e = new Error(`Zeitüberschreitung bei „${stage || 'Anbieter-Anfrage'}"`);
+        e.code = 'timeout';
+        e.stage = stage;
+        throw e;
+      }
       const e = new Error('Provider unreachable (network or CORS)');
       e.code = 'network_or_cors';
+      e.stage = stage;
       e.cause = err;
       throw e;
     }
@@ -58,6 +67,7 @@ export class XtreamAdapter {
       const e = new Error(`Provider request failed (HTTP ${res.status})`);
       e.code = 'http_error';
       e.status = res.status;
+      e.stage = stage;
       throw e;
     }
     try {
@@ -65,21 +75,32 @@ export class XtreamAdapter {
     } catch {
       const e = new Error('Provider returned invalid JSON');
       e.code = 'invalid_response';
+      e.stage = stage;
       throw e;
     }
   }
 
   async authenticate() {
     // No action returns user_info — the canonical credential check.
-    const data = await this.fetchJson(this.playerApi(null));
+    const data = await this.fetchJson(this.playerApi(null), 15_000, 'Anmeldung');
     const info = data && data.user_info;
     const ok = Boolean(info && (info.auth === 1 || info.auth === '1' || info.auth === true));
     if (!ok) {
       const e = new Error('Provider rejected the credentials');
       e.code = 'invalid_credentials';
+      e.stage = 'Anmeldung';
       throw e;
     }
     return { ok: true, info: { status: info.status, expDate: info.exp_date } };
+  }
+
+  /** Real request URLs for staged connection diagnostics. */
+  stageUrls() {
+    return [
+      { label: 'Anmeldung', url: this.playerApi(null), timeoutMs: 15_000 },
+      { label: 'Kategorien', url: this.playerApi('get_live_categories'), timeoutMs: 30_000 },
+      { label: 'Senderliste', url: this.playerApi('get_live_streams'), timeoutMs: 30_000 },
+    ];
   }
 
   singleFlight(holder, ttlMs, loader) {
@@ -99,9 +120,11 @@ export class XtreamAdapter {
 
   async getChannels() {
     return this.singleFlight(this.channelsCache, CHANNEL_CACHE_MS, async () => {
+      // 90s budget: live-stream lists of big providers are 20+ MB and slow
+      // links (mobile) legitimately need minutes worth of seconds.
       const [categories, streams] = await Promise.all([
-        this.fetchJson(this.playerApi('get_live_categories')).then((d) => (Array.isArray(d) ? d : [])),
-        this.fetchJson(this.playerApi('get_live_streams')).then((d) => (Array.isArray(d) ? d : [])),
+        this.fetchJson(this.playerApi('get_live_categories'), 90_000, 'Kategorien').then((d) => (Array.isArray(d) ? d : [])),
+        this.fetchJson(this.playerApi('get_live_streams'), 90_000, 'Senderliste').then((d) => (Array.isArray(d) ? d : [])),
       ]);
       const catName = new Map();
       for (const c of categories) {
@@ -150,6 +173,8 @@ export class XtreamAdapter {
     return this.singleFlight(holder, EPG_CACHE_MS, async () => {
       const data = await this.fetchJson(
         this.playerApi('get_short_epg', { stream_id: String(streamId), limit: String(limit) }),
+        15_000,
+        'EPG',
       );
       return (data && Array.isArray(data.epg_listings) ? data.epg_listings : []).map((e) => ({
         id: e.id,

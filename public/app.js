@@ -1,7 +1,7 @@
-import { XtreamAdapter } from './js/providers/xtream.js?v=9';
-import { M3UAdapter } from './js/providers/m3u.js?v=9';
-import { fetchXmltv, parseXMLTV, shortEpg } from './js/providers/xmltv.js?v=9';
-import { diagnoseFailure, httpsTwin } from './js/providers/netcheck.js?v=9';
+import { XtreamAdapter } from './js/providers/xtream.js?v=10';
+import { M3UAdapter } from './js/providers/m3u.js?v=10';
+import { fetchXmltv, parseXMLTV, shortEpg } from './js/providers/xmltv.js?v=10';
+import { diagnoseStages, httpsTwin } from './js/providers/netcheck.js?v=10';
 import {
   loadProfiles,
   upsertProfile,
@@ -16,7 +16,7 @@ import {
   saveFavorites,
   getRecent,
   pushRecent,
-} from './js/profiles.js?v=9';
+} from './js/profiles.js?v=10';
 
 (function () {
   'use strict';
@@ -408,6 +408,9 @@ import {
     const e = err || {};
     // Diagnosed failures carry a precise, actionable message already.
     if (e.diagnosisMessage) return e.diagnosisMessage;
+    if (e.code === 'timeout') {
+      return `Zeitüberschreitung${e.stage ? ` bei „${e.stage}"` : ''} — die Verbindung ist zu langsam. Stabiles WLAN verwenden und erneut versuchen.`;
+    }
     if (e.code === 'network_or_cors' || err instanceof TypeError) {
       return `Anbieter nicht erreichbar (Netzwerk oder CORS).${mixedContentHint(e.providerUrl)}`;
     }
@@ -418,8 +421,40 @@ import {
     return e.message || 'Unbekannter Verbindungsfehler.';
   }
 
+  /**
+   * Render a provider error into one of the error <p> elements: message
+   * text plus an optional clickable self-test URL (opens the provider's
+   * real API/playlist address in a new tab so the user can distinguish a
+   * blocked provider from an app problem).
+   */
+  function renderProviderError(el, err) {
+    if (!el) return;
+    el.textContent = classifyProviderError(err);
+    const url = err && err.testUrl;
+    if (url && /^https?:\/\//i.test(url)) {
+      const br = document.createElement('br');
+      const a = document.createElement('a');
+      a.href = url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = '→ Selbst-Test: Anbieter-Adresse im Browser öffnen';
+      el.appendChild(br);
+      el.appendChild(a);
+    }
+  }
+
   function isNetworkFailure(err) {
     return Boolean(err && (err.code === 'network_or_cors' || err instanceof TypeError));
+  }
+
+  function isTimeoutFailure(err) {
+    return Boolean(err && err.code === 'timeout');
+  }
+
+  /** Adapter for a (possibly upgraded) host — used for staged diagnosis. */
+  function buildStageUrls(type, host, username, password, epgUrl) {
+    const { adapter } = createAdapter({ type, host, username, password, epgUrl });
+    return typeof adapter.stageUrls === 'function' ? adapter.stageUrls() : null;
   }
 
   /**
@@ -439,17 +474,20 @@ import {
   }
 
   /**
-   * Connect with automatic HTTPS upgrade + precise failure diagnosis.
+   * Connect with automatic HTTPS upgrade + staged failure diagnosis.
    *
-   * Browser network failures are opaque (DNS block, adblocker, firewall,
-   * mixed content and genuine CORS refusals all look alike). When the
-   * entered host fails at the network level and is http://, the https://
-   * twin is tried automatically — many providers (esp. Cloudflare-fronted)
-   * serve the same API over both, and https is strictly more compatible
-   * (no mixed content, survives HTTPS deployments).
+   * Transport failures in browsers are opaque (DNS block, adblocker,
+   * firewall, slow links and genuine CORS refusals all look alike), and a
+   * timed-out 20 MB catalog fetch used to be misreported as "CORS". Now:
+   *  - timeouts get their own error class (code 'timeout') with a large
+   *    catalog budget (90s) in the adapters
+   *  - http:// hosts failing at transport level try the https:// twin
+   *  - if everything fails, the provider's REAL request sequence
+   *    (Anmeldung -> Kategorien -> Senderliste) is re-run stage by stage
+   *    to pinpoint the failing step and its actual cause
    *
    * Returns { adapter, host, upgraded }. Throws an error enriched with
-   * `diagnosisMessage` when everything failed.
+   * `diagnosisMessage` and `testUrl` when everything failed.
    */
   async function connectWithDiagnosis({ type, host, username, password, epgUrl }) {
     let firstErr = null;
@@ -457,27 +495,48 @@ import {
       const adapter = await attemptConnect({ type, host, username, password, epgUrl });
       return { adapter, host, upgraded: false };
     } catch (err) {
-      if (!isNetworkFailure(err)) throw err; // real provider answer — not a transport problem
+      if (!isNetworkFailure(err) && !isTimeoutFailure(err)) throw err; // real provider answer
       firstErr = err;
     }
 
-    // Transport-level failure on http://: try the https twin before giving up.
-    const twin = httpsTwin(host);
-    if (twin) {
-      try {
-        const adapter = await attemptConnect({ type, host: twin, username, password, epgUrl });
-        return { adapter, host: twin, upgraded: true };
-      } catch (err) {
-        if (!isNetworkFailure(err)) throw err; // https answered — trust that verdict
+    // Transport-level failure on http://: try the https twin before giving
+    // up (NOT for timeouts — the twin sits on the same edge and would only
+    // double the wait).
+    if (isNetworkFailure(firstErr)) {
+      const twin = httpsTwin(host);
+      if (twin) {
+        try {
+          const adapter = await attemptConnect({ type, host: twin, username, password, epgUrl });
+          return { adapter, host: twin, upgraded: true };
+        } catch (err) {
+          if (!isNetworkFailure(err) && !isTimeoutFailure(err)) throw err; // https answered — trust it
+          firstErr = firstErr || err;
+        }
       }
     }
 
-    // Both transports failed: identify the actual cause on THIS device.
-    const diag = await diagnoseFailure(host);
+    // Everything failed: re-run the provider's real request sequence to
+    // identify the failing stage and the actual cause on THIS device.
     const wrap = firstErr || new Error('Verbindung fehlgeschlagen.');
     wrap.code = wrap.code || 'network_or_cors';
     wrap.providerUrl = host;
-    wrap.diagnosisMessage = diag.message;
+    const stages = buildStageUrls(type, host, username, password, epgUrl);
+    if (stages) {
+      const diag = await diagnoseStages(stages);
+      if (diag.kind === 'ok') {
+        // Everything passes NOW — the original failure was transient.
+        wrap.diagnosisMessage =
+          'Die Verbindung funktioniert jetzt auf Anhieb — der erste Versuch war vermutlich eine kurze Schwankung. Bitte erneut versuchen.';
+      } else {
+        wrap.diagnosisMessage = diag.message;
+        if (diag.testUrl) wrap.testUrl = diag.testUrl;
+      }
+    } else {
+      wrap.diagnosisMessage =
+        isTimeoutFailure(wrap)
+          ? 'Die Verbindung war zu langsam und wurde abgebrochen. Stabiles WLAN verwenden und erneut versuchen.'
+          : 'Der Anbieter ist nicht erreichbar. Netzwerk/Werbeblocker prüfen und erneut versuchen.';
+    }
     throw wrap;
   }
 
@@ -500,6 +559,7 @@ import {
     }
 
     els.obSubmit.disabled = true;
+    els.obSubmit.querySelector('span').textContent = 'Verbinde … (große Senderlisten können etwas dauern)';
     els.onboardError.textContent = '';
     try {
       const { adapter, host: connectedHost, upgraded } = await connectWithDiagnosis({
@@ -529,9 +589,10 @@ import {
         : `${profile.name} verbunden · ${loaded.length} Sender`);
     } catch (err) {
       if (err && !err.providerUrl) err.providerUrl = host;
-      els.onboardError.textContent = classifyProviderError(err);
+      renderProviderError(els.onboardError, err);
     } finally {
       els.obSubmit.disabled = false;
+      els.obSubmit.querySelector('span').textContent = 'Verbinden & testen';
       els.obPassword.value = '';
     }
   });
@@ -696,11 +757,14 @@ import {
       }
 
       if (err && !err.providerUrl) err.providerUrl = profile.host;
-      if (isNetworkFailure(err)) {
-        // Identify the actual cause on this device (mixed content, DNS /
-        // blocker, or genuine CORS) for an actionable message.
-        const diag = await diagnoseFailure(profile.host);
-        err.diagnosisMessage = diag.message;
+      if ((isNetworkFailure(err) || isTimeoutFailure(err)) && adapter && typeof adapter.stageUrls === 'function') {
+        // Re-run the provider's real request sequence to pinpoint the
+        // failing stage (Anmeldung/Kategorien/Senderliste) and its cause.
+        const diag = await diagnoseStages(adapter.stageUrls());
+        if (diag.kind !== 'ok') {
+          err.diagnosisMessage = diag.message;
+          if (diag.testUrl) err.testUrl = diag.testUrl;
+        }
       }
       catalogError = classifyProviderError(err);
       els.connDot.className = 'conn-dot off';
@@ -949,7 +1013,7 @@ import {
         toast(`${saved.name} gespeichert`);
       }
     } catch (err) {
-      els.pmError.textContent = classifyProviderError(err);
+      renderProviderError(els.pmError, err);
     } finally {
       els.pmSubmit.disabled = false;
       els.pmPassword.value = '';
