@@ -116,6 +116,38 @@ function isTimeoutError(err) {
 }
 
 /**
+ * Read up to `maxBytes` from a response body and measure how long it took.
+ * Used to measure the REAL download throughput to the provider (headers
+ * arrive fast even on very slow links — only body reads reveal the truth).
+ * Cancels the rest of the body. Throws a TimeoutError-named error when the
+ * sample cannot be read within `budgetMs`.
+ */
+async function readBodySample(res, maxBytes, budgetMs) {
+  const reader = res.body.getReader();
+  const t0 = Date.now();
+  let bytes = 0;
+  let timerId;
+  const timer = new Promise((_, reject) => {
+    timerId = setTimeout(() => {
+      const e = new Error('body sample timeout');
+      e.name = 'TimeoutError';
+      reject(e);
+    }, budgetMs);
+  });
+  try {
+    while (bytes < maxBytes) {
+      const { done, value } = await Promise.race([reader.read(), timer]);
+      if (done) break;
+      bytes += value.byteLength;
+    }
+  } finally {
+    clearTimeout(timerId);
+    try { reader.cancel(); } catch { /* already closed */ }
+  }
+  return { bytes, seconds: Math.max(0.001, (Date.now() - t0) / 1000) };
+}
+
+/**
  * Stage-by-stage diagnosis: runs the provider's real request sequence
  * (auth -> categories -> channel list) and identifies WHICH step fails and
  * why. This distinguishes:
@@ -125,10 +157,13 @@ function isTimeoutError(err) {
  *    no-cors but the CORS read fails)
  *  - genuine network blocks (DNS/firewall/adblocker)
  *
- * stages: [{ label, url, timeoutMs? }] — returns
- * { kind, stageLabel, message, testUrl? } and never throws.
- * kind 'ok' means every stage passed NOW (the original failure was
- * transient — worth retrying).
+ * stages: [{ label, url, timeoutMs?, probeBytes?, probeBudgetMs? }] —
+ * stages with `probeBytes` read that many body bytes to measure the actual
+ * download throughput (result field `throughputKBs`).
+ *
+ * Returns { kind, stageLabel, message, testUrl?, throughputKBs? } and
+ * never throws. kind 'ok' means every stage passed NOW; combine with the
+ * original error to decide whether a retry makes sense.
  */
 export async function diagnoseStages(stages, { fetchImpl = fetch } = {}) {
   const fail = (kind, stageLabel, message, testUrl) => ({ kind, stageLabel, message, testUrl });
@@ -145,23 +180,11 @@ export async function diagnoseStages(stages, { fetchImpl = fetch } = {}) {
       );
     }
 
+    let throughputKBs = 0;
     for (const stage of stages) {
+      let res;
       try {
-        const res = await probeCors(stage.url, { fetchImpl, timeoutMs: stage.timeoutMs });
-        if (!res.ok) {
-          return fail(
-            'http_error',
-            stage.label,
-            `Der Anbieter hat bei „${stage.label}" mit HTTP ${res.status} geantwortet. ` +
-              'Zugangsdaten bzw. Anbieter-Status prüfen.',
-            stage.url,
-          );
-        }
-        // stage OK — release the body without downloading it (catalogs can
-        // be 20 MB; diagnosis only needs the status + CORS headers).
-        try {
-          if (res.body && typeof res.body.cancel === 'function') res.body.cancel().catch(() => {});
-        } catch { /* already drained */ }
+        res = await probeCors(stage.url, { fetchImpl, timeoutMs: stage.timeoutMs });
       } catch (err) {
         if (isTimeoutError(err)) {
           return fail(
@@ -199,8 +222,41 @@ export async function diagnoseStages(stages, { fetchImpl = fetch } = {}) {
           stage.url,
         );
       }
+
+      if (!res.ok) {
+        return fail(
+          'http_error',
+          stage.label,
+          `Der Anbieter hat bei „${stage.label}" mit HTTP ${res.status} geantwortet. ` +
+            'Zugangsdaten bzw. Anbieter-Status prüfen.',
+          stage.url,
+        );
+      }
+
+      // Stage headers OK — either measure the real download throughput
+      // (probeBytes) or release the body without reading it (catalogs can
+      // be 20 MB; plain status probes only need the headers).
+      try {
+        if (stage.probeBytes && res.body && typeof res.body.getReader === 'function') {
+          const sample = await readBodySample(res, stage.probeBytes, stage.probeBudgetMs || 30_000);
+          if (sample.bytes > 0) throughputKBs = sample.bytes / 1024 / sample.seconds;
+        } else if (res.body && typeof res.body.cancel === 'function') {
+          res.body.cancel().catch(() => {});
+        }
+      } catch (err) {
+        if (isTimeoutError(err)) {
+          return fail(
+            'timeout',
+            stage.label,
+            `„${stage.label}" antwortet, aber die Daten kommen nicht schnell genug an — die Verbindung ist zu langsam für die große Senderliste. ` +
+              'Lösungen: stabiles WLAN verwenden, VPN testen und danach erneut verbinden.',
+            stage.url,
+          );
+        }
+        /* body probing is best-effort — ignore other errors */
+      }
     }
-    return { kind: 'ok', stageLabel: '', message: '' };
+    return { kind: 'ok', stageLabel: '', message: '', throughputKBs };
   } catch {
     return fail('unknown', '', 'Die Verbindung konnte nicht aufgebaut werden.');
   }

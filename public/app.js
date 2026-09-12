@@ -1,7 +1,7 @@
-import { XtreamAdapter } from './js/providers/xtream.js?v=10';
-import { M3UAdapter } from './js/providers/m3u.js?v=10';
-import { fetchXmltv, parseXMLTV, shortEpg } from './js/providers/xmltv.js?v=10';
-import { diagnoseStages, httpsTwin } from './js/providers/netcheck.js?v=10';
+import { XtreamAdapter } from './js/providers/xtream.js?v=11';
+import { M3UAdapter } from './js/providers/m3u.js?v=11';
+import { fetchXmltv, parseXMLTV, shortEpg } from './js/providers/xmltv.js?v=11';
+import { diagnoseStages, httpsTwin } from './js/providers/netcheck.js?v=11';
 import {
   loadProfiles,
   upsertProfile,
@@ -16,7 +16,7 @@ import {
   saveFavorites,
   getRecent,
   pushRecent,
-} from './js/profiles.js?v=10';
+} from './js/profiles.js?v=11';
 
 (function () {
   'use strict';
@@ -524,9 +524,7 @@ import {
     if (stages) {
       const diag = await diagnoseStages(stages);
       if (diag.kind === 'ok') {
-        // Everything passes NOW — the original failure was transient.
-        wrap.diagnosisMessage =
-          'Die Verbindung funktioniert jetzt auf Anhieb — der erste Versuch war vermutlich eine kurze Schwankung. Bitte erneut versuchen.';
+        wrap.diagnosisMessage = okDiagnosisMessage(wrap, diag);
       } else {
         wrap.diagnosisMessage = diag.message;
         if (diag.testUrl) wrap.testUrl = diag.testUrl;
@@ -538,6 +536,35 @@ import {
           : 'Der Anbieter ist nicht erreichbar. Netzwerk/Werbeblocker prüfen und erneut versuchen.';
     }
     throw wrap;
+  }
+
+  /**
+   * Message when the staged diagnosis passes but the original connect
+   * failed: the provider answers fine — the full catalog download was the
+   * problem. Header-only stages pass on links that cannot sustain a 20 MB
+   * body transfer, so "transient" would be a lie for timeouts.
+   */
+  function okDiagnosisMessage(err, diag) {
+    if (isTimeoutFailure(err)) {
+      let detail = '';
+      if (diag && diag.throughputKBs && diag.throughputKBs >= 1) {
+        const minutes = Math.max(1, Math.round(20480 / diag.throughputKBs / 60));
+        detail =
+          ` Gemessene Geschwindigkeit zum Anbieter: ~${Math.round(diag.throughputKBs)} KB/s — ` +
+          `die Senderliste (20+ MB) braucht damit ca. ${minutes} Min.`;
+        if (minutes > 5) {
+          detail += ' Diese Verbindung reicht dafür voraussichtlich nicht aus — schnelleres Netz/WLAN oder VPN nutzen.';
+        }
+      }
+      return (
+        'Der Anbieter antwortet, aber der Download der großen Senderliste wurde abgebrochen — die Verbindung ist zu langsam oder instabil.' +
+        detail +
+        ' Bitte erneut versuchen und die App dabei geöffnet lassen.'
+      );
+    }
+    return (
+      'Die Verbindung funktioniert jetzt auf Anhieb — der erste Versuch war vermutlich eine kurze Schwankung. Bitte erneut versuchen.'
+    );
   }
 
   els.onboardForm.addEventListener('submit', async (e) => {
@@ -764,6 +791,8 @@ import {
         if (diag.kind !== 'ok') {
           err.diagnosisMessage = diag.message;
           if (diag.testUrl) err.testUrl = diag.testUrl;
+        } else {
+          err.diagnosisMessage = okDiagnosisMessage(err, diag);
         }
       }
       catalogError = classifyProviderError(err);

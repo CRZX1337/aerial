@@ -98,8 +98,16 @@ export class XtreamAdapter {
   stageUrls() {
     return [
       { label: 'Anmeldung', url: this.playerApi(null), timeoutMs: 15_000 },
-      { label: 'Kategorien', url: this.playerApi('get_live_categories'), timeoutMs: 30_000 },
-      { label: 'Senderliste', url: this.playerApi('get_live_streams'), timeoutMs: 30_000 },
+      { label: 'Kategorien', url: this.playerApi('get_live_categories'), timeoutMs: 60_000 },
+      {
+        label: 'Senderliste',
+        url: this.playerApi('get_live_streams'),
+        timeoutMs: 90_000,
+        // Read 256 KB of the real channel list to measure the actual
+        // download throughput (headers alone hide slow links).
+        probeBytes: 262_144,
+        probeBudgetMs: 30_000,
+      },
     ];
   }
 
@@ -120,11 +128,26 @@ export class XtreamAdapter {
 
   async getChannels() {
     return this.singleFlight(this.channelsCache, CHANNEL_CACHE_MS, async () => {
-      // 90s budget: live-stream lists of big providers are 20+ MB and slow
-      // links (mobile) legitimately need minutes worth of seconds.
+      // 300s budget + one retry: live-stream lists of big providers are
+      // 20+ MB, and slow international links legitimately need minutes.
+      // Mid-transfer resets are common on long downloads — a single retry
+      // rescues those.
+      const fetchStreams = async () => {
+        const url = this.playerApi('get_live_streams');
+        const load = () =>
+          this.fetchJson(url, 300_000, 'Senderliste').then((d) => (Array.isArray(d) ? d : []));
+        try {
+          return await load();
+        } catch (err) {
+          if (err.code === 'timeout' || err.code === 'network_or_cors') {
+            return await load(); // one retry
+          }
+          throw err;
+        }
+      };
       const [categories, streams] = await Promise.all([
         this.fetchJson(this.playerApi('get_live_categories'), 90_000, 'Kategorien').then((d) => (Array.isArray(d) ? d : [])),
-        this.fetchJson(this.playerApi('get_live_streams'), 90_000, 'Senderliste').then((d) => (Array.isArray(d) ? d : [])),
+        fetchStreams(),
       ]);
       const catName = new Map();
       for (const c of categories) {

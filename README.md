@@ -94,7 +94,8 @@ connections simply cannot be used from the browser.
 When a connection fails, Aerial does not just say "network error":
 
 1. **Generous transfer budgets:** catalog downloads (channel lists can be
-   20+ MB) get a 90-second budget — slow international links are a normal
+   20+ MB) get a 5-minute budget **plus one automatic retry** for
+   interrupted transfers — slow international links are a normal
    situation, not an error. Auth/EPG requests use 15 seconds. Timeouts are
    reported as timeouts ("Verbindung zu langsam"), never as network/CORS
    failures.
@@ -103,14 +104,18 @@ When a connection fails, Aerial does not just say "network error":
    automatically. Many Cloudflare-fronted providers serve the same API over
    both — and `https` survives HTTPS deployments and stricter networks.
    The upgraded URL is stored in the profile.
-3. **Staged diagnosis:** if everything fails, Aerial re-runs the provider's
-   real request sequence (login → categories → channel list) and pinpoints
-   the failing step and its actual cause on *your* device — mixed content,
-   a timeout on a slow link, network-level blocks (DNS filter, firewall,
-   adblocker extension), or a provider/WAF that blocks browsers — and shows
-   the matching fix plus a **clickable self-test link** that opens the
-   provider's real API URL in a new tab (data = report an app bug;
-   block/challenge page = the provider or your network blocks the request).
+3. **Staged diagnosis with throughput measurement:** if everything fails,
+   Aerial re-runs the provider's real request sequence (login →
+   categories → channel list), reads the first 256 KB of the channel list
+   to **measure your actual download speed**, and pinpoints the failing
+   step and its actual cause on *your* device — mixed content, a timeout
+   on a slow link (including a concrete estimate like *"~40 KB/s — the
+   channel list needs ~9 min, this connection won't suffice"*), network
+   blocks (DNS filter, firewall, adblocker), or a provider/WAF that blocks
+   browsers — and shows the matching fix plus a **clickable self-test
+   link** that opens the provider's real API URL in a new tab (data =
+   report an app bug; block/challenge page = the provider or your network
+   blocks the request).
 
 **Troubleshooting a failed connection:**
 - App served over **https://** and provider URL is **http://** → use the

@@ -130,7 +130,16 @@ export class M3UAdapter {
 
   /** Real request URLs for staged connection diagnostics. */
   stageUrls() {
-    return [{ label: 'Playlist', url: this.url, timeoutMs: 30_000 }];
+    return [
+      {
+        label: 'Playlist',
+        url: this.url,
+        timeoutMs: 90_000,
+        // Read 256 KB of the real playlist to measure download throughput.
+        probeBytes: 262_144,
+        probeBudgetMs: 30_000,
+      },
+    ];
   }
 
   async authenticate() {
@@ -146,7 +155,8 @@ export class M3UAdapter {
     if (this.catalog && this.catalog.inflight) return this.catalog.inflight;
     this.catalog = { ...this.catalog, inflight: null };
     const load = (async () => {
-      const text = await this.fetchText(this.url);
+      // 300s budget: big playlists are tens of MB and slow links need minutes.
+      const text = await this.fetchText(this.url, 300_000, 'Playlist');
       const data = parseM3U(text);
       if (!data.epgUrl && this.epgUrl) data.epgUrl = this.epgUrl;
       this.catalog = { at: this.now(), data, inflight: null };

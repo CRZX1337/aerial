@@ -118,7 +118,7 @@ test('index.html has complete iOS/PWA metadata and the player app shell', () => 
   assert.doesNotMatch(html, /<script(?![^>]*src=)[^>]*>/);
 
   // App entry is an ES module (cache-busted)
-  assert.match(html, /<script type="module" src="\/app\.js\?v=10">/);
+  assert.match(html, /<script type="module" src="\/app\.js\?v=11">/);
   // Branding: Aerial
   assert.match(html, /<title>Aerial<\/title>/);
 });
@@ -216,7 +216,7 @@ test('app.js implements autoplay + recovery + lifecycle without silent errors', 
   assert.match(js, /adapter, \/\/ reuse the probed catalog/);
 
   // Connection diagnostics: https auto-upgrade + staged failure analysis
-  assert.match(js, /import \{ diagnoseStages, httpsTwin \} from '\.\/js\/providers\/netcheck\.js\?v=10'/);
+  assert.match(js, /import \{ diagnoseStages, httpsTwin \} from '\.\/js\/providers\/netcheck\.js\?v=11'/);
   assert.match(js, /function connectWithDiagnosis\(/);
   assert.match(js, /const twin = httpsTwin\(host\)/);
   assert.match(js, /diagnosisMessage/); // precise cause overrides generic message
@@ -233,8 +233,15 @@ test('app.js implements autoplay + recovery + lifecycle without silent errors', 
   assert.match(fs.readFileSync(path.join(PUBLIC, 'js', 'providers', 'm3u.js'), 'utf8'), /AbortSignal\.timeout/);
   // ... with a generous catalog budget (20+ MB lists on slow links)
   const xtreamSrc = fs.readFileSync(path.join(PUBLIC, 'js', 'providers', 'xtream.js'), 'utf8');
-  assert.match(xtreamSrc, /90_000, 'Senderliste'/);
+  assert.match(xtreamSrc, /300_000, 'Senderliste'/);
   assert.match(xtreamSrc, /stageUrls\(\)/);
+  // ... and one automatic retry for interrupted catalog downloads
+  assert.match(xtreamSrc, /one retry/);
+  assert.match(xtreamSrc, /probeBytes: 262_144/); // throughput measurement stage
+  // "ok" diagnosis differentiates timeouts (slow link) from true transients
+  assert.match(js, /function okDiagnosisMessage\(err, diag\)/);
+  assert.match(js, /throughputKBs/);
+  assert.match(js, /Diese Verbindung reicht dafür voraussichtlich nicht aus/);
 });
 
 test('provider modules implement the adapter interface cleanly', () => {

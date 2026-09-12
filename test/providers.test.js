@@ -237,6 +237,76 @@ test('XtreamAdapter: stageUrls exposes the real request sequence for diagnostics
   assert.ok(!stages[0].url.includes('action='));
   assert.ok(stages[2].url.includes('action=get_live_streams'));
   assert.ok(stages.every((s) => typeof s.timeoutMs === 'number'));
+  // the channel-list stage measures real download throughput
+  assert.equal(stages[2].probeBytes, 262_144);
+  assert.ok(stages[2].probeBudgetMs > 0);
+});
+
+test('XtreamAdapter: catalog download retries once on timeout/network failure', async () => {
+  const mock = makeXtreamMock();
+  await new Promise((r) => mock.server.listen(0, '127.0.0.1', r));
+  const host = `http://127.0.0.1:${mock.server.address().port}`;
+
+  let streamsCalls = 0;
+  const realFetch = fetch;
+  const fetchImpl = async (url, opts) => {
+    if (String(url).includes('action=get_live_streams')) {
+      streamsCalls += 1;
+      if (streamsCalls === 1) {
+        // first attempt: mid-transfer reset (TypeError like browsers report)
+        throw new TypeError('Failed to fetch');
+      }
+    }
+    return realFetch(url, opts);
+  };
+
+  const adapter = new XtreamAdapter({ host, username: 'user', password: 'pass', fetchImpl });
+  try {
+    await adapter.authenticate();
+    const { channels } = await adapter.getChannels();
+    assert.equal(channels.length, 3); // retry rescued the catalog
+    assert.equal(streamsCalls, 2, 'exactly one retry');
+  } finally {
+    mock.server.close();
+  }
+});
+
+test('XtreamAdapter: catalog retry gives up after the second failure', async () => {
+  const mock = makeXtreamMock();
+  await new Promise((r) => mock.server.listen(0, '127.0.0.1', r));
+  const host = `http://127.0.0.1:${mock.server.address().port}`;
+
+  let streamsCalls = 0;
+  const fetchImpl = async (url) => {
+    if (String(url).includes('action=get_live_streams')) {
+      streamsCalls += 1;
+      throw new TypeError('Failed to fetch');
+    }
+    return realFetchImplMock(host)(url);
+  };
+  // simple local mock for non-streams endpoints
+  const realFetchImplMock = (h) => async (url) => {
+    const u = new URL(String(url));
+    if (u.searchParams.get('action') === 'get_live_categories') {
+      return new Response(JSON.stringify([{ category_id: '1', category_name: 'News' }]), {
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({ user_info: { auth: 1 } }), {
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+
+  const adapter = new XtreamAdapter({ host, username: 'user', password: 'pass', fetchImpl });
+  try {
+    await assert.rejects(
+      () => adapter.getChannels(),
+      (e) => e.code === 'network_or_cors' && e.stage === 'Senderliste',
+    );
+    assert.equal(streamsCalls, 2, 'one retry, then the error surfaces');
+  } finally {
+    mock.server.close();
+  }
 });
 
 test('XtreamAdapter: credentials are URL-encoded in stream URLs', () => {

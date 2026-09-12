@@ -141,3 +141,63 @@ test('diagnoseStages: never throws and tolerates garbage input', async () => {
   const diag2 = await diagnoseStages([], { fetchImpl: async () => okResponse() });
   assert.equal(diag2.kind, 'unknown');
 });
+
+// ------------------------------------------- throughput probing (probeBytes) --
+
+function streamBody(chunks, { stall = false } = {}) {
+  return new ReadableStream({
+    start(controller) {
+      if (stall) return; // never enqueues — reads hang forever
+      for (const c of chunks) controller.enqueue(c);
+      controller.close();
+    },
+  });
+}
+
+function responseWithBody(body) {
+  return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
+}
+
+test('diagnoseStages: probeBytes measures real download throughput', async () => {
+  const fetchImpl = async (url) => {
+    if (url.includes('x=3')) {
+      // 300 KB of body data — the probe reads 256 KB of it and cancels the rest
+      return responseWithBody(streamBody([new Uint8Array(150_000), new Uint8Array(150_000)]));
+    }
+    return okResponse();
+  };
+  const stages = [
+    ...STAGES.slice(0, 2),
+    { ...STAGES[2], probeBytes: 262_144, probeBudgetMs: 5_000 },
+  ];
+  const diag = await diagnoseStages(stages, { fetchImpl });
+  assert.equal(diag.kind, 'ok');
+  assert.ok(diag.throughputKBs > 0, `throughput measured: ${diag.throughputKBs} KB/s`);
+});
+
+test('diagnoseStages: stalled body within the probe budget -> timeout diagnosis', async () => {
+  const fetchImpl = async (url) => {
+    if (url.includes('x=3')) return responseWithBody(streamBody([], { stall: true }));
+    return okResponse();
+  };
+  const stages = [
+    ...STAGES.slice(0, 2),
+    { ...STAGES[2], probeBytes: 262_144, probeBudgetMs: 50 },
+  ];
+  const diag = await diagnoseStages(stages, { fetchImpl });
+  assert.equal(diag.kind, 'timeout');
+  assert.equal(diag.stageLabel, 'Senderliste');
+  assert.match(diag.message, /zu langsam/);
+});
+
+test('diagnoseStages: body probing degrades silently without streams', async () => {
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    body: null, // very old browsers: no body stream exposed
+  });
+  const stages = [{ ...STAGES[0], probeBytes: 262_144 }];
+  const diag = await diagnoseStages(stages, { fetchImpl });
+  assert.equal(diag.kind, 'ok');
+  assert.equal(diag.throughputKBs, 0);
+});
